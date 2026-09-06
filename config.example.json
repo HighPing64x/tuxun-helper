@@ -1,0 +1,18 @@
+{
+  "proxy_enabled": false,
+  "proxy_port": 8080,
+  "display_delay": 0.4,
+  "map_zoom": 5,
+  "map_tiles": "osm",
+  "amap_key": "",
+  "log_history": true,
+  "upstream_proxy": "",
+  "anti_decoy": true,
+  "decoy_window": 3.0,
+  "name_protect": {
+    "enabled": false,
+    "rules": []
+  },
+  "ai_auto": false,
+  "near_m": 150
+}

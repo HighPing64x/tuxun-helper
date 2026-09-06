@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+    * { box-sizing: border-box; }
+    body, html {
+        width: 100%; height: 100%; margin: 0; padding: 0;
+        overflow: hidden; background: #0b0e14;
+        display: flex; flex-direction: column;   /* 上下分区：控制区固定，地图自适应 */
+    }
+
+    #panel {
+        flex: 0 0 auto;
+        background: rgba(16, 20, 28, 0.97); color: #00E5FF; padding: 8px 12px;
+        font-family: "Microsoft YaHei", sans-serif; font-size: 12px;
+        border-bottom: 2px solid #FFD700;
+    }
+    .row { margin: 4px 0; display: flex; align-items: center; flex-wrap: wrap; }
+    .row label { width: 76px; color: #FFD700; flex: none; }
+    .row input, .row select {
+        background: #1a2030; color: #00E5FF; border: 1px solid #33405c;
+        padding: 4px 6px; margin-right: 10px; border-radius: 3px;
+    }
+    .row input[type="text"] { flex: 1; min-width: 140px; }
+    .row input[type="number"] { width: 72px; }
+    .btn {
+        background: #1a1a2e; color: #00E5FF; border: 1px solid #00E5FF;
+        padding: 4px 14px; cursor: pointer; margin-right: 8px; border-radius: 3px;
+        font-size: 12px; flex: none;
+    }
+    .btn:hover { background: #00E5FF; color: #000; }
+    .btn-open { background: #14351a; border-color: #4CAF50; }
+    .btn-open:hover { background: #4CAF50; color: #000; }
+    .btn-close { background: #4a1717; border-color: #F44336; }
+    .btn-close:hover { background: #F44336; color: #fff; }
+    .btn-mini { border-color: #6c7a99; color: #9fb3d9; padding: 3px 10px; }
+    .btn-mini:hover { background: #6c7a99; color: #fff; }
+    .chk { color: #cfe3ff; display: flex; align-items: center; gap: 4px; margin-right: 10px; flex: none; cursor: pointer; }
+    .chk input { margin: 0; }
+    #status { color: #8f8; margin-left: 6px; }
+
+    #address-bar {
+        flex: 0 0 auto;
+        background: rgba(16, 20, 28, 0.95); color: #eee; padding: 8px 14px;
+        font-family: "Microsoft YaHei", sans-serif;
+        border-bottom: 1px solid #2a3350;
+    }
+    #coords { color: #FFD700; font-size: 18px; font-weight: bold; font-family: Consolas, monospace; }
+    #src { color: #7f8ea8; font-size: 11px; margin-left: 8px; }
+    #addr { display: block; color: #cfe3ff; font-size: 13px; margin: 3px 0 7px; min-height: 17px; }
+    .tag {
+        display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 3px;
+        margin-right: 8px; vertical-align: 2px; font-family: "Microsoft YaHei", sans-serif;
+    }
+    .tag-origin { background: #4a3b06; color: #FFD700; border: 1px solid #FFD700; }
+    .tag-cur { background: #0e3320; color: #69db7c; border: 1px solid #69db7c; }
+    .curpos { color: #69db7c; font-family: Consolas, monospace; font-size: 14px; }
+    #cur-dist { margin-left: 10px; }
+
+    /* 地图占满剩余空间，且永远不会把控制区挤走 */
+    #container { flex: 1 1 auto; min-height: 0; width: 100%; }
+
+    /* 历史落点：小号、半透明、不喧宾夺主 */
+    #history {
+        position: fixed; left: 8px; bottom: 8px; z-index: 1000;
+        background: rgba(12, 15, 22, 0.72); color: #8fa3c2;
+        font-family: "Microsoft YaHei", sans-serif; font-size: 11px; line-height: 1.4;
+        border: 1px solid rgba(42, 51, 80, 0.7); border-radius: 4px;
+        max-width: 330px; max-height: 30%; overflow-y: auto;
+        padding: 2px 0; list-style: none; margin: 0;
+        opacity: 0.82; transition: opacity .15s;
+    }
+    #history:hover { opacity: 1; background: rgba(12, 15, 22, 0.92); }
+    #history li { padding: 2px 9px; cursor: pointer; border-bottom: 1px solid rgba(42,51,80,.35); }
+    #history li:hover { background: rgba(0, 229, 255, .12); color: #fff; }
+    #history li.decoy { color: #d97a7a; }
+    #history li.decoy:hover { color: #ffb3b3; }
+    #history li.candidate { color: #f0a35e; }
+    #history li.candidate:hover { color: #ffc89e; }
+    #history li.cur { color: #69db7c; }
+    #history li.cur:hover { color: #a5f0c5; }
+    #history li.ai { color: #4FC3F7; }
+    #history li.ai:hover { color: #9bdcff; }
+    .hint { color: #55627e; }
+    #cookie-prompt {
+        position: fixed; top: 118px; left: 50%; transform: translateX(-50%); z-index: 2000;
+        background: rgba(40, 28, 4, 0.96); color: #FFD700; padding: 10px 16px;
+        border: 1px solid #FFD700; border-radius: 4px;
+        font-family: "Microsoft YaHei", sans-serif; font-size: 13px;
+    }
+    #cookie-prompt .btn { margin-left: 8px; }
+</style>
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+    /* 国内 CDN 兜底：BootCDN 加载失败时回退到 unpkg */
+    if (typeof L === 'undefined') {
+        document.write('<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.min.js"><\/script>');
+    }
+</script>
+</head>
+<body>
+    <div id="panel">
+        <div class="row">
+            <label>代理端口:</label><input type="number" id="port" min="1" max="65535">
+            <label>显示延迟:</label><input type="number" id="delay" step="0.1" min="0" max="10"> 秒
+            <label>地图缩放:</label><input type="number" id="zoom" min="2" max="18">
+            <label>瓦片源:</label>
+            <select id="tiles">
+                <option value="osm">OSM 标准</option>
+                <option value="amap">高德地图（国内推荐）</option>
+                <option value="arcgis">ArcGIS 卫星</option>
+            </select>
+        </div>
+        <div class="row">
+            <label>高德Key:</label>
+            <input type="text" id="amap_key" placeholder="（可选，已内置默认 Key）">
+            <button class="btn btn-open" onclick="openProxy()">开启拦截</button>
+            <button class="btn btn-close" onclick="closeProxy()">关闭拦截</button>
+            <label class="chk" title="把网页上显示的昵称/ID 替换为别名（修改页面显示，有被反作弊检测的风险）">
+                <input type="checkbox" id="np" onclick="toggleNP(this)"> 名称保护⚠
+            </label>
+            <label class="chk" title="识别到对局后每 3 秒直读 solo/get 真实坐标（绕过诱饵，需图寻 Cookie）">
+                <input type="checkbox" id="ap" onclick="toggleAP(this)"> API直读
+            </label>
+            <label class="chk" title="同回合首个坐标为准，后续可疑坐标只记录不采信">
+                <input type="checkbox" id="ad" onclick="toggleAD(this)"> 防诱饵
+            </label>
+            <label class="chk" title="新回合自动抓图交给 AI 分析并自动对答案（需在 .env 配置 AI Key，消耗额度）">
+                <input type="checkbox" id="aia" onclick="toggleAIA(this)"> AI自动
+            </label>
+            <button class="btn" onclick="saveConfig()">保存配置</button>
+            <span id="status" class="hint"></span>
+        </div>
+    </div>
+
+    <div id="address-bar">
+        <div>
+            <span class="tag tag-origin">原点</span><span id="coords">等待捕获街景坐标...</span><span id="src"></span>
+        </div>
+        <div id="cur-line" style="display:none">
+            <span class="tag tag-cur">目前</span><span id="cur-pos" class="curpos"></span><span id="cur-dist" class="hint"></span>
+        </div>
+        <span id="addr" class="hint"></span>
+        <button class="btn btn-mini" onclick="copyCoords()">复制原点</button>
+        <button class="btn btn-mini" onclick="copyCur()">复制目前</button>
+        <button class="btn btn-mini" onclick="openOSM()">OSM</button>
+        <button class="btn btn-mini" onclick="openGMap()">Google</button>
+        <button class="btn btn-mini" onclick="openAmap()">高德</button>
+    </div>
+
+    <div id="container"></div>
+    <ul id="history"></ul>
+
+    <div id="cookie-prompt" style="display:none">
+        检测到 <b id="cp-plat"></b>，是否自动录入cookie？
+        <button class="btn btn-open" onclick="cookieAns(true)">是</button>
+        <button class="btn btn-close" onclick="cookieAns(false)">否</button>
+    </div>
+
+<script>
+var cfg = __CONFIG_JSON__;
+var currentTiles = cfg.map_tiles || 'osm';
+var map, marker, tileLayer = null, candMarker = null;
+var points = [];          // 本次会话捕获的全部点
+var current = null;       // 地址栏当前展示的点
+
+var tileConfigs = {
+    osm:    { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', sub: 'abc', conv: 'wgs',
+              attr: '&copy; OpenStreetMap 贡献者', maxZoom: 19 },
+    amap:   { url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x={x}&y={y}&z={z}',
+              sub: '1234', conv: 'gcj', attr: '&copy; 高德地图', maxZoom: 18 },
+    arcgis: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+              sub: 'abc', conv: 'wgs', attr: 'Esri World Imagery', maxZoom: 19 }
+};
+
+/* ---------------- WGS84 <-> GCJ-02（火星坐标）转换 ---------------- */
+var PI = Math.PI, GA = 6378245.0, EE = 0.00669342162296594323;
+function outOfChina(lat, lng) { return !(lng > 73.66 && lng < 135.05 && lat > 3.86 && lat < 53.55); }
+function tLat(x, y) {
+    var r = -100.0 + 2.0*x + 3.0*y + 0.2*y*y + 0.1*x*y + 0.2*Math.sqrt(Math.abs(x));
+    r += (20.0*Math.sin(6.0*x*PI) + 20.0*Math.sin(2.0*x*PI)) * 2.0/3.0;
+    r += (20.0*Math.sin(y*PI) + 40.0*Math.sin(y/3.0*PI)) * 2.0/3.0;
+    r += (160.0*Math.sin(y/12.0*PI) + 320.0*Math.sin(y*PI/30.0)) * 2.0/3.0;
+    return r;
+}
+function tLng(x, y) {
+    var r = 300.0 + x + 2.0*y + 0.1*x*x + 0.1*x*y + 0.1*Math.sqrt(Math.abs(x));
+    r += (20.0*Math.sin(6.0*x*PI) + 20.0*Math.sin(2.0*x*PI)) * 2.0/3.0;
+    r += (20.0*Math.sin(x*PI) + 40.0*Math.sin(x/3.0*PI)) * 2.0/3.0;
+    r += (150.0*Math.sin(x/12.0*PI) + 300.0*Math.sin(x/30.0*PI)) * 2.0/3.0;
+    return r;
+}
+function wgs2gcj(lat, lng) {
+    if (outOfChina(lat, lng)) return [lat, lng];
+    var dlat = tLat(lng - 105.0, lat - 35.0), dlng = tLng(lng - 105.0, lat - 35.0);
+    var radlat = lat / 180.0 * PI, magic = Math.sin(radlat);
+    magic = 1 - EE * magic * magic;
+    var sq = Math.sqrt(magic);
+    dlat = (dlat * 180.0) / ((GA * (1 - EE)) / (magic * sq) * PI);
+    dlng = (dlng * 180.0) / (GA / sq * Math.cos(radlat) * PI);
+    return [lat + dlat, lng + dlng];
+}
+function gcj2wgs(lat, lng) {
+    if (outOfChina(lat, lng)) return [lat, lng];
+    var dlat = tLat(lng - 105.0, lat - 35.0), dlng = tLng(lng - 105.0, lat - 35.0);
+    var radlat = lat / 180.0 * PI, magic = Math.sin(radlat);
+    magic = 1 - EE * magic * magic;
+    var sq = Math.sqrt(magic);
+    dlat = (dlat * 180.0) / ((GA * (1 - EE)) / (magic * sq) * PI);
+    dlng = (dlng * 180.0) / (GA / sq * Math.cos(radlat) * PI);
+    return [lat * 2 - (lat + dlat), lng * 2 - (lng + dlng)];
+}
+/* 把记录坐标换算成当前瓦片源需要的坐标系 */
+function dispLatLng(rec) {
+    var conv = tileConfigs[currentTiles].conv;
+    if (conv === 'gcj') return rec.coord === 'gcj02' ? [rec.lat, rec.lng] : wgs2gcj(rec.lat, rec.lng);
+    return rec.coord === 'gcj02' ? gcj2wgs(rec.lat, rec.lng) : [rec.lat, rec.lng];
+}
+
+/* ---------------- 基础工具 ---------------- */
+function $(id) { return document.getElementById(id); }
+function status(msg, ms) {
+    $('status').innerText = msg;
+    if (ms) setTimeout(function () { $('status').innerText = ''; }, ms);
+}
+function api() { return (window.pywebview && pywebview.api) ? pywebview.api : null; }
+
+/* ---------------- 瓦片源 ---------------- */
+function setTiles(name) {
+    if (!tileConfigs[name]) name = 'osm';
+    currentTiles = name;
+    if (tileLayer) map.removeLayer(tileLayer);
+    var c = tileConfigs[name];
+    tileLayer = L.tileLayer(c.url, { subdomains: c.sub, maxZoom: c.maxZoom, attribution: c.attr });
+    tileLayer.addTo(map);
+    if (current && !current.decoy) {
+        var p = dispLatLng(current);
+        marker.setLatLng(p);
+        map.panTo(p);
+    }
+}
+
+/* ---------------- 展示 ---------------- */
+function showRecord(rec, fly) {
+    current = rec;
+    var p = dispLatLng(rec);
+    marker.setLatLng(p).addTo(map);
+    if (fly) map.flyTo(p, Math.max(map.getZoom(), 14));
+    $('coords').innerText = rec.lat.toFixed(6) + ', ' + rec.lng.toFixed(6);
+    $('addr').innerText = rec.address || '（暂无地址）';
+    $('src').innerText = (rec.source ? ' · ' + rec.source : '') + (rec.time ? ' · ' + rec.time : '');
+}
+
+function handleNewPoint(rec) {
+    points.push(rec);
+    if (rec.decoy) {
+        status('⚠ 检测到反作弊诱饵坐标，已排除（保留首个正确点）', 4000);
+    } else if (rec.candidate) {
+        if (!candMarker) {
+            candMarker = L.circleMarker([0, 0], {
+                radius: 8, color: '#e57373', weight: 2, fillColor: '#e57373',
+                fillOpacity: 0.7, dashArray: '4 3'
+            }).addTo(map);
+        }
+        candMarker.setLatLng(dispLatLng(rec)).addTo(map);
+        map.panTo(dispLatLng(rec));
+        status('⚠ 同回合出现第二坐标（二选一候选，红点）：刷新场景诱饵可能先到。开启「API直读」可自动校准', 10000);
+    } else if (rec.moved) {
+        movedRec(rec);
+    } else {
+        var first = !points.some(function (p) { return !p.decoy && !p.candidate && !p.moved; });
+        showRecord(rec, false);
+        if (first) map.setView(dispLatLng(rec), Math.max(cfg.map_zoom || 5, 10));
+        else map.panTo(dispLatLng(rec));
+        $('cur-line').style.display = 'none';   // 新回合：隐藏「目前」（等待移动事件）
+        if (curMarker) map.removeLayer(curMarker), curMarker = null;
+    }
+    renderHistory();
+}
+
+/* ---------------- 原点 / 目前（移动模式） ---------------- */
+var curMarker = null;
+function movedRec(rec) {
+    if (!curMarker) {
+        curMarker = L.circleMarker([0, 0], {
+            radius: 7, color: '#69db7c', weight: 2, fillColor: '#69db7c', fillOpacity: 0.8
+        }).addTo(map);
+    }
+    curMarker.setLatLng(dispLatLng(rec)).addTo(map);
+    if (current) map.panTo(dispLatLng(rec));
+    $('cur-line').style.display = 'block';
+    $('cur-pos').innerText = rec.lat.toFixed(6) + ', ' + rec.lng.toFixed(6);
+    $('cur-dist').innerText = rec.from_origin_m != null
+        ? '距原点 ' + Math.round(rec.from_origin_m) + ' m' : '';
+    status('📍 玩家位置已更新（答案保持原点）', 3000);
+    renderHistory();
+}
+function copyCur() {
+    var a = api(); if (!a) return;
+    var t = $('cur-pos').innerText;
+    if (!t) { status('暂无「目前」坐标', 2000); return; }
+    a.copy_text_api(t).then(function (r) { status(r.message || '已复制', 1500); });
+}
+
+function renderHistory() {
+    var ul = $('history');
+    ul.innerHTML = '';
+    for (var i = points.length - 1; i >= 0; i--) {
+        (function (rec) {
+            var li = document.createElement('li');
+            if (rec.decoy) li.className = 'decoy';
+            if (rec.candidate) li.className = 'candidate';
+            if (rec.ai) li.className = 'ai';
+            if (rec.moved) li.className = 'cur';
+            li.innerText = '[' + rec.time + '] ' + rec.lat.toFixed(5) + ', ' + rec.lng.toFixed(5) +
+                           (rec.decoy ? ' ⚠诱饵' : (rec.candidate ? ' ？候选' :
+                            (rec.moved ? ' 📍目前' :
+                             (rec.ai ? ' 🤖AI' : (rec.address ? ' · ' + rec.address : '')))));
+            li.onclick = function () {
+                if (rec.decoy) return;   // 诱饵点不作为主展示
+                if (rec.candidate && candMarker) {
+                    candMarker.setLatLng(dispLatLng(rec));
+                    map.flyTo(dispLatLng(rec), Math.max(map.getZoom(), 14));
+                    return;
+                }
+                if (rec.moved && curMarker) {
+                    curMarker.setLatLng(dispLatLng(rec));
+                    map.flyTo(dispLatLng(rec), Math.max(map.getZoom(), 14));
+                    status('📍 玩家位置（答案保持原点）', 3000);
+                    return;
+                }
+                showRecord(rec, true);
+            };
+            ul.appendChild(li);
+        })(points[i]);
+    }
+    while (ul.children.length > 30) ul.removeChild(ul.lastChild);
+}
+
+/* ---------------- AI 自动分析结果 ---------------- */
+var aiMarker = null;
+function aiGuess(rec) {
+    if (!aiMarker) {
+        aiMarker = L.circleMarker([0, 0], {
+            radius: 8, color: '#4FC3F7', weight: 2, fillColor: '#4FC3F7', fillOpacity: 0.85
+        }).addTo(map);
+    }
+    var conv = tileConfigs[currentTiles].conv;
+    var p = (conv === 'gcj' && rec.coord !== 'gcj02') ? wgs2gcj(rec.lat, rec.lng) : [rec.lat, rec.lng];
+    if (conv !== 'gcj' && rec.coord === 'gcj02') p = gcj2wgs(rec.lat, rec.lng);
+    aiMarker.setLatLng(p).addTo(map);
+    map.panTo(p);
+    status('🤖 AI 猜测: ' + rec.lat.toFixed(5) + ', ' + rec.lng.toFixed(5) +
+           (rec.error_km != null ? '（距真实答案 ' + rec.error_km + ' km）' : ''), 10000);
+    points.push({lat: rec.lat, lng: rec.lng, coord: rec.coord || 'wgs84',
+                 address: 'AI: ' + (rec.analysis || '').split('\n')[0], time: rec.time, ai: true});
+    renderHistory();
+}
+
+/* ---------------- 按钮动作 ---------------- */
+function copyCoords() {
+    if (!current) return;
+    var a = api(); if (!a) return;
+    a.copy_text_api(current.lat + ', ' + current.lng).then(function (r) { status(r.message || '已复制', 1500); });
+}
+function openOSM()   { if (current) api() && api().open_url_api('https://www.openstreetmap.org/?mlat=' + current.lat + '&mlon=' + current.lng + '#map=16/' + current.lat + '/' + current.lng); }
+function openGMap()  { if (current) api() && api().open_url_api('https://www.google.com/maps?q=' + current.lat + ',' + current.lng); }
+function openAmap()  {
+    if (!current) return;
+    var g = current.coord === 'gcj02' ? [current.lat, current.lng] : wgs2gcj(current.lat, current.lng);
+    api() && api().open_url_api('https://uri.amap.com/marker?position=' + g[1] + ',' + g[0]);
+}
+
+/* ---------------- 配置 ---------------- */
+function fillForm() {
+    $('port').value = cfg.proxy_port || 8080;
+    $('delay').value = (cfg.display_delay != null) ? cfg.display_delay : 0.4;
+    $('zoom').value = cfg.map_zoom || 5;
+    $('amap_key').value = cfg.amap_key || '';
+    $('tiles').value = currentTiles;
+    $('np').checked = !!(cfg.name_protect && cfg.name_protect.enabled);
+    $('ad').checked = cfg.anti_decoy !== false;
+    $('aia').checked = !!cfg.ai_auto;
+    $('ap').checked = !!cfg.api_poll;
+}
+function toggleAP(cb) {
+    cfg.api_poll = cb.checked;
+    var a = api(); if (!a) return;
+    a.set_api_poll(cb.checked).then(function (r) { status(r.message || '', 5000); });
+}
+function showCookiePrompt(plat) {
+    $('cp-plat').innerText = plat;
+    $('cookie-prompt').style.display = 'block';
+}
+function cookieAns(ans) {
+    $('cookie-prompt').style.display = 'none';
+    var a = api(); if (!a) return;
+    a.answer_cookie_prompt(ans).then(function (r) { status(r.message || '', 8000); });
+}
+function toggleAIA(cb) {
+    cfg.ai_auto = cb.checked;
+    var a = api(); if (!a) return;
+    a.toggle_ai_auto(cb.checked).then(function (r) { status(r.message || '', 6000); });
+}
+function toggleNP(cb) {
+    cfg.name_protect = cfg.name_protect || {};
+    cfg.name_protect.enabled = cb.checked;
+    var a = api(); if (!a) return;
+    a.save_config_api(cfg).then(function (r) {
+        status(cb.checked
+            ? '⚠ 名称保护已开启：会向页面注入本地脚本，图寻可能检测页面篡改（同油猴），风险自负'
+            : '名称保护已关闭', 8000);
+    });
+}
+function toggleAD(cb) {
+    cfg.anti_decoy = cb.checked;
+    var a = api(); if (!a) return;
+    a.save_config_api(cfg).then(function (r) {
+        status(cb.checked ? '防诱饵已开启（同回合首个坐标为准）' : '防诱饵已关闭', 3000);
+    });
+}
+function saveConfig() {
+    var a = api(); if (!a) return;
+    cfg.proxy_port = parseInt($('port').value) || 8080;
+    cfg.display_delay = parseFloat($('delay').value) || 0;
+    cfg.map_zoom = parseInt($('zoom').value) || 5;
+    cfg.map_tiles = $('tiles').value;
+    cfg.amap_key = $('amap_key').value.trim();
+    a.save_config_api(cfg).then(function (r) { status(r.message, 2000); });
+}
+function openProxy()  { var a = api(); if (a) a.open_proxy_api().then(function (r) { status(r.message, 5000); }); }
+function closeProxy() { var a = api(); if (a) a.close_proxy_api().then(function (r) { status(r.message, 5000); }); }
+
+/* ---------------- 初始化 ---------------- */
+map = L.map('container').setView([32.0, 105.0], cfg.map_zoom || 5);
+marker = L.circleMarker([0, 0], { radius: 9, color: '#FFD700', weight: 2, fillColor: '#FFD700', fillOpacity: 0.9 });
+setTiles(currentTiles);
+fillForm();
+</script>
+</body>
+</html>

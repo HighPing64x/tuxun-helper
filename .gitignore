@@ -1,0 +1,42 @@
+# 敏感信息与个人配置
+.env
+config.json
+cookies*.json
+*cookie*.json
+
+# 运行产物
+history.jsonl
+*.log
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 打包产物
+build/
+dist/
+*.spec
+
+# 构建产物
+dist/
+build/
+*.spec
+.build-venv/
+release/
+_exetest/
+_build*.log
+
+# 本地大型知识库（可选资产，单独分发）
+TuxunSkill/
