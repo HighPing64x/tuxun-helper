@@ -40,3 +40,6 @@ _build*.log
 
 # 本地大型知识库（可选资产，单独分发）
 TuxunSkill/
+
+# 临时分析产物
+_umi_bundle.js

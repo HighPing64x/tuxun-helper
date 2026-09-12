@@ -449,8 +449,9 @@ def run_draw(cookies: dict) -> None:
         else:
             resp = agent.session.get(f"{base}/api/v0/tuxun/draw/dailyChallenge", timeout=10)
             data = (resp.json().get("data") or {}) or {}
-            day = data.get("dayStr", "?")
-            print(f"[每挑战抽奖] 抽奖完成 → [{day}] {describe_draw(data)}")
+            day = data.get("dayStr")
+            suffix = f" [{day}]" if day else ""
+            print(f"[每挑战抽奖] 抽奖完成{suffix} → {describe_draw(data)}")
 
         # 2) 每日任务抽奖（完成每日挑战后解锁，可抽会员）
         time.sleep(1.5)
