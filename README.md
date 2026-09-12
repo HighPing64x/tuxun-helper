@@ -168,7 +168,7 @@ python main.py --history 5             # 批量复盘最近 5 局（图寻）
 python main.py --mode geoguessr --history      # GeoGuessr 最近对局
 python main.py 6dea8f92-810e-11f1 --ai-review  # AI 同题作答并对比误差
 
-# ===== 每日会员抽奖 =====
+# ===== 每日抽奖（每挑战抽奖 + 每日任务抽奖，后者完成每日挑战后解锁）=====
 python main.py --draw
 ```
 

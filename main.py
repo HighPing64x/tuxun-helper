@@ -416,34 +416,54 @@ def describe_draw(info: dict) -> str:
     parts = []
     vip_ms = info.get("rewardVipMs") or 0
     gems = info.get("rewardGems") or 0
+    if info.get("type") == "vip" and info.get("days"):
+        parts.append(f"图寻会员 {info['days']} 天")
     if vip_ms:
-        parts.append(f"图寻会员 {vip_ms / 86400000:.0f} 天")
+        parts.append(f"图寻会员 {vip_ms / 86400000:.1f} 天")
     if gems:
         parts.append(f"{gems} 钻石")
+    if info.get("hours"):
+        parts.append(f"{info['hours']} 小时")
+    if info.get("minutes"):
+        parts.append(f"{info['minutes']} 分钟")
     if not parts:
         parts.append("谢谢参与（未中奖）")
-    return f"[{info.get('dayStr', '?')}] " + " + ".join(parts)
+    day = info.get("dayStr")
+    return f"[{day}] " + " + ".join(parts) if day else " + ".join(parts)
 
 
 def run_draw(cookies: dict) -> None:
-    """--draw：每日挑战页的「抽图寻会员」抽奖（已抽过则只报告结果）。"""
+    """--draw：跑一遍所有每日抽奖（每挑战抽奖 + 每日任务抽奖）。"""
     if not cookies.get("tuxun"):
         print("错误：未配置 TUXUN_COOKIE。")
         return
     try:
         agent = TuxunAgent(cookies["tuxun"])
         base = agent.base_url
+
+        # 1) 完成每日挑战的抽奖
         resp = agent.session.get(f"{base}/api/v0/tuxun/draw/checkDailyChallenge", timeout=10)
         data = (resp.json().get("data") or {})
         if data.get("status") == "drawed":
-            print(f"今天的会员抽奖已经抽过啦 → {describe_draw(data.get('drawResult') or {})}")
-            return
-        resp = agent.session.get(f"{base}/api/v0/tuxun/draw/dailyChallenge", timeout=10)
-        data = (resp.json().get("data") or {}) or {}
-        if data:
-            print(f"抽奖完成 → {describe_draw(data)}")
+            print(f"[每挑战抽奖] 今天已抽过 → {describe_draw(data.get('drawResult') or {})}")
         else:
-            print("抽奖未返回结果（可能今日次数已用完或接口变动）。")
+            resp = agent.session.get(f"{base}/api/v0/tuxun/draw/dailyChallenge", timeout=10)
+            data = (resp.json().get("data") or {}) or {}
+            day = data.get("dayStr", "?")
+            print(f"[每挑战抽奖] 抽奖完成 → [{day}] {describe_draw(data)}")
+
+        # 2) 每日任务抽奖（完成每日挑战后解锁，可抽会员）
+        time.sleep(1.5)
+        resp = agent.session.get(f"{base}/api/v0/tuxun/task/dailyLottery/status", timeout=10)
+        lot = (resp.json().get("data") or {})
+        if lot.get("canDraw"):
+            resp = agent.session.post(f"{base}/api/v0/tuxun/task/dailyLottery/draw", timeout=10)
+            reward = (resp.json().get("data") or {}) or {}
+            print(f"[每日任务抽奖] 抽奖完成 → {describe_draw(reward)}")
+        elif lot.get("drawnToday"):
+            print(f"[每日任务抽奖] 今天已抽过 → {describe_draw(lot.get('lastReward') or {})}")
+        else:
+            print("[每日任务抽奖] 暂不可抽：完成今日每日挑战后解锁。")
     except Exception as exc:  # noqa: BLE001
         print(f"抽奖失败: {exc}")
 
