@@ -63,7 +63,7 @@
   .side.left:hover  .underline { background: #ff7850; }
   .side.right:hover .icon  { filter: drop-shadow(0 0 14px rgba(90,190,255,.55)); }
   .side.right:hover .underline { background: #5ab8ff; }
-  body.side-hover-left  .side.right, body.side-hover-right .side.left { opacity: .18; filter: saturate(0) brightness(.5); transform: scale(.96); }
+  body.side-hover-left  .side.right, body.side-hover-right .side.left { opacity: .38; filter: saturate(.45) brightness(.72); transform: scale(.97); }
 
   /* ---- 白点展开的圆环（悬停白点）---- */
   #ring {
@@ -158,16 +158,18 @@
   <div id="status">镜像状态加载中…</div>
 
 <script>
-/* ---- 状态轮询（镜像/拦截运行状态），全部走同源相对路径 ---- */
-var mirrorPorts = {};
+/* ---- 状态轮询（镜像/拦截/登录状态），全部走同源相对路径 ---- */
+var mirrorPorts = {}, cookieState = {};
 function refresh() {
   fetch('/state').then(r => r.json()).then(st => {
     mirrorPorts = st.mirrors || {};
+    cookieState = st.cookies || {};
     var t = mirrorPorts.tuxun ? '运行中' : '未启动';
     var g = mirrorPorts.geoguessr ? '运行中' : '未启动';
+    var ck = function (v) { return v ? '<b style="color:#69db7c">已登录</b>' : '<b style="color:#d97a7a">未登录</b>'; };
     document.getElementById('status').innerHTML =
-      '图寻镜像 <b>' + t + '</b> ｜ GeoGuessr 镜像 <b>' + g + '</b> ｜ 拦截 <b>' +
-      (st.intercept ? '运行中' : '未启动') + '</b>' +
+      '图寻 Cookie ' + ck(cookieState.tuxun) + ' ｜ Geo Cookie ' + ck(cookieState.geoguessr) +
+      ' ｜ 图寻镜像 <b>' + t + '</b> ｜ Geo 镜像 <b>' + g + '</b>' +
       (mirrorPorts.tuxun ? ' ｜ 左侧进入 <b>127.0.0.1:' + mirrorPorts.tuxun + '</b>' : '') +
       (mirrorPorts.geoguessr ? ' ｜ 右侧 <b>127.0.0.1:' + mirrorPorts.geoguessr + '</b>' : '');
   }).catch(() => {
@@ -202,12 +204,20 @@ document.getElementById('side-geo').addEventListener('mouseenter', function () {
   document.body.classList.add('side-hover-right'); document.body.classList.remove('side-hover-left');
 });
 document.getElementById('side-tuxun').addEventListener('click', function () {
-  if (mirrorPorts.tuxun) location.href = 'http://127.0.0.1:' + mirrorPorts.tuxun + '/';
-  else alert('图寻镜像未启动：请确认已配置 TUXUN_COOKIE 或在启动参数加 --mirror');
+  if (mirrorPorts.tuxun) { location.href = 'http://127.0.0.1:' + mirrorPorts.tuxun + '/'; return; }
+  if (confirm('图寻镜像未启动。是否打开官网登录（可微信扫码，Cookie 自动录入）？登录后重启程序即可开镜像。')) {
+    fetch('/login/tuxun', { method: 'POST' });
+  }
 });
 document.getElementById('side-geo').addEventListener('click', function () {
-  if (mirrorPorts.geoguessr) location.href = 'http://127.0.0.1:' + mirrorPorts.geoguessr + '/';
-  else alert('GeoGuessr 镜像未启动：请先在 .env 配置 GEOGUESSR_COOKIE');
+  if (mirrorPorts.geoguessr) { location.href = 'http://127.0.0.1:' + mirrorPorts.geoguessr + '/'; return; }
+  if (cookieState.geoguessr) {
+    alert('GeoGuessr 镜像未启动（Cookie 已有，请重启程序）');
+    return;
+  }
+  if (confirm('GeoGuessr 未登录。要在弹出的助手窗口打开官网登录吗？登录后 Cookie 自动录入、镜像自动可用。')) {
+    fetch('/login/geoguessr', { method: 'POST' });
+  }
 });
 
 /* ---- 圆环三分区动作 ---- */

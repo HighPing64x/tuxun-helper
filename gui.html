@@ -108,9 +108,9 @@
             <label>地图缩放:</label><input type="number" id="zoom" min="2" max="18">
             <label>瓦片源:</label>
             <select id="tiles">
-                <option value="amap">高德地图（推荐）</option>
+                <option value="osm">OSM 标准（本地代理）</option>
+                <option value="amap">高德地图</option>
                 <option value="arcgis">ArcGIS 卫星</option>
-                <option value="osm">OSM 标准（可能 403）</option>
             </select>
         </div>
         <div class="row">
@@ -118,6 +118,8 @@
             <input type="text" id="amap_key" placeholder="（可选，已内置默认 Key）">
             <button class="btn btn-open" onclick="openProxy()">开启拦截</button>
             <button class="btn btn-close" onclick="closeProxy()">关闭拦截</button>
+            <button class="btn" title="打开图寻官网正常登录（可微信扫码），Cookie 自动录入" onclick="loginPlat('tuxun')">登录图寻</button>
+            <button class="btn" title="打开 GeoGuessr 官网登录，Cookie 自动录入" onclick="loginPlat('geoguessr')">登录Geo</button>
             <label class="chk" title="把网页上显示的昵称/ID 替换为别名（修改页面显示，有被反作弊检测的风险）">
                 <input type="checkbox" id="np" onclick="toggleNP(this)"> 名称保护⚠
             </label>
@@ -161,14 +163,15 @@
 
 <script>
 var cfg = __CONFIG_JSON__;
-var currentTiles = cfg.map_tiles || 'amap';
+var currentTiles = cfg.map_tiles || 'osm';
 var map, marker, tileLayer = null, candMarker = null;
 var points = [];          // 本次会话捕获的全部点
 var current = null;       // 地址栏当前展示的点
 
 var tileConfigs = {
-    osm:    { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', sub: 'abc', conv: 'wgs',
-              attr: '&copy; OpenStreetMap 贡献者', maxZoom: 19 },
+    /* OSM 官方瓦片会拦截 WebView/应用类 UA（403），改走本地控制端口的合规代理（缓存+规范 UA） */
+    osm:    { url: 'http://127.0.0.1:' + (cfg.control_port || 18080) + '/tiles/osm/{z}/{x}/{y}.png',
+              sub: '', conv: 'wgs', attr: '&copy; OpenStreetMap 贡献者', maxZoom: 19 },
     amap:   { url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x={x}&y={y}&z={z}',
               sub: '1234', conv: 'gcj', attr: '&copy; 高德地图', maxZoom: 18 },
     arcgis: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
@@ -226,6 +229,11 @@ function status(msg, ms) {
     if (ms) setTimeout(function () { $('status').innerText = ''; }, ms);
 }
 function api() { return (window.pywebview && pywebview.api) ? pywebview.api : null; }
+window.setStatus = status;   // 供 Python 登录流程返回后跨页面调用
+function loginPlat(plat) {
+    var a = api(); if (!a) return;
+    a.login_platform(plat).then(function (r) { status(r.message || '', 6000); });
+}
 
 /* ---------------- 瓦片源 ---------------- */
 function setTiles(name) {

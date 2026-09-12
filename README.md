@@ -52,7 +52,8 @@
 - **防诱饵（距离 + 移动模式双判定）**：距离变化 ≤150 米 = 同一地点确认正确；无移动回合的远距坐标 = 诱饵排除；可移动回合的远距坐标 = 玩家合法移动（静默）；真值未知时判候选二选一，API 到位自动校准
 - **Clash 开关自适应**：开启拦截时自动检测已有系统代理并级联转发（浏览器 → 本工具 → Clash → 互联网），被墙流量照常出得去；关闭/退出时**原样还原**你的代理设置
 - **三重防护不断网**：看门狗（代理守卫改写自动夺回、代理线程退出立即还原）+ 启动自愈（清理崩溃残留）+ 全退出路径信号处理
-- **Cookie 自动录入**：检测到平台 Cookie 弹窗询问「是否自动录入？」，同意后写入 `.env` 即时生效，拒绝则不再询问
+- **内置登录窗口（免手动抓 Cookie）**：GUI 点「登录图寻」/「登录Geo」，或 `--login tuxun|geoguessr`——窗口打开官网正常登录（图寻可微信扫码），工具后台轮询 Cookie（图寻认 `fun_ticket`、Geo 认 `session`），抓到自动写入 `.env` 并返回，镜像**即时生效**；选择页点击未登录的平台也会触发登录窗口
+- **Cookie 自动录入（被动）**：镜像/拦截检测到平台 Cookie 弹窗询问「是否自动录入？」，同意后写入 `.env` 即时生效，拒绝则不再询问
 - **双图源拦截**：Google 街景（`GetMetadata`）+ 图寻国内图源（`get(QQ)PanoInfo`）
 - **稳健解析**：已知响应结构优先 + 递归扫描兜底，平台改版也不怕
 - **内置地图**：Leaflet 暗色地图实时落点，三种瓦片源可选（OSM / 高德 / ArcGIS 卫星），无需申请任何地图 Key
@@ -150,6 +151,11 @@ TUXUN_COOKIE=fun_ticket=eyJf...
 ### 4. 运行
 
 ```bash
+# ===== 登录（免手动抓 Cookie）=====
+python tuxun_proxy.py --login tuxun        # 打开图寻官网登录（微信扫码），Cookie 自动写入 .env
+python tuxun_proxy.py --login geoguessr    # 同理，GeoGuessr
+# GUI 模式也可直接点「登录图寻」/「登录Geo」按钮；选择页点击未登录平台同样触发
+
 # ===== 实时取点 =====
 python tuxun_proxy.py --install-cert   # 首次一次：安装证书（装过跳过）
 python tuxun_proxy.py                  # 图形界面 → 点「开启拦截」→ 浏览器正常做题
@@ -233,7 +239,7 @@ python main.py --draw
 | `proxy_port` | 本地代理端口 | `8080` |
 | `proxy_enabled` | 下次启动自动开启拦截 | `false` |
 | `display_delay` | 捕获到坐标后的显示延迟（秒） | `0.4` |
-| `map_tiles` | 瓦片源：`amap`（高德，**默认**）/ `arcgis` / `osm`。⚠ OSM 已按其瓦片使用政策对本应用类访问返回 403（[osm.wiki/Blocked](https://osm.wiki/Blocked)），默认已改高德，OSM 仅供手动尝试 | `amap` |
+| `map_tiles` | 瓦片源：`osm`（**默认**，经本地 `/tiles/osm/` 代理转发：合规 UA + 磁盘缓存 `cache/`，规避 OSM 对 WebView 类 UA 的 403 封锁）/ `amap` / `arcgis` | `osm` |
 | `map_zoom` | 地图初始缩放 | `5` |
 | `amap_key` | 高德 Web 服务 Key（已内置默认 Key，开箱即用） | 内置 |
 | `upstream_proxy` | 上级代理。**留空 = 自动跟随系统已有代理（Clash 自适应）** | 空（自动） |

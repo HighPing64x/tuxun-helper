@@ -48,3 +48,6 @@ _umi_bundle.js
 _*.py
 _*.html
 _*.js
+
+# 本地瓦片缓存（OSM 代理）
+cache/

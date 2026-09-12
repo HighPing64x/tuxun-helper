@@ -110,7 +110,7 @@ DEFAULT_CONFIG = {
     "proxy_port": 8080,       # 本地代理端口
     "display_delay": 0.4,     # 捕获到坐标后的显示延迟（秒），缓解瞬间跳图
     "map_zoom": 5,            # 地图初始缩放级别
-    "map_tiles": "amap",      # 瓦片源: amap（高德，默认）/ arcgis / osm（OSM 已对应用类 403 限制，慎选）
+    "map_tiles": "osm",       # 瓦片源: osm（经本地代理转发，合规 UA+缓存）/ amap / arcgis
     "amap_key": DEFAULT_AMAP_KEY,     # 高德 Web服务 Key（已内置默认，可在 config.json 覆盖）
     "amap_js_key": DEFAULT_AMAP_JS_KEY,  # 高德 JS Key（预留）
     "log_history": True,      # 是否把捕获点写入 history.jsonl
@@ -149,11 +149,8 @@ def load_config() -> dict:
             logger.info("配置文件已读取: %s", applog.sanitize_json(config))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("config.json 读取失败，使用默认配置: %s", exc)
-    if config.get("map_tiles") == "osm":
-        # OSM 瓦片服务器已对本应用类访问实施 403 限制（osm.wiki/Blocked），
-        # 老配置一次性迁移到高德；OSM 仍可在 GUI 手动选择。
-        config["map_tiles"] = "amap"
-        logger.info("瓦片源从 osm 迁移为 amap（OSM 已 403 限制应用类访问）。")
+    if config.get("map_tiles") not in ("osm", "amap", "arcgis"):
+        config["map_tiles"] = "osm"
     return config
 
 
@@ -1020,6 +1017,56 @@ def _graceful_exit(app: "TuxunApp") -> None:
     os._exit(0)
 
 
+# ---------------------------------------------------------------------------
+# OSM 本地瓦片代理：浏览器访问 http://127.0.0.1:控制端口/tiles/osm/{z}/{x}/{y}.png
+# 为什么存在：OSM 官方瓦片按使用政策拦截了 WebView/应用类 UA（osm.wiki/Blocked 的
+# 403 封锁页）。本地代理用「合规的应用 UA + 磁盘缓存」转发请求，既是政策允许的
+# 轻量应用访问方式，也让瓦片可稳定通过 Clash 级联。
+# ---------------------------------------------------------------------------
+
+_TILE_CACHE_DIR = os.path.join(BASE_DIR, "cache", "tiles")
+_TILE_UA = "TuxunHelper/1.0 (https://github.com/HighPing64x/tuxun-helper)"
+_TILE_RE = re.compile(r"^/tiles/osm/(\d{1,2})/(\d{1,4})/(\d{1,4})(?:@2x)?\.png$")
+
+
+def _osm_tile_fetch(z: int, x: int, y: int, app: Optional["TuxunApp"] = None) -> Optional[bytes]:
+    cache = os.path.join(_TILE_CACHE_DIR, f"{z}_{x}_{y}.png")
+    if os.path.isfile(cache) and os.path.getsize(cache) > 0:
+        try:
+            with open(cache, "rb") as f:
+                return f.read()
+        except OSError:
+            pass
+    if z > 19 or x >= (1 << z) or y >= (1 << z):
+        return None
+    url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    try:
+        import requests
+
+        proxies = {}
+        try:
+            if app is not None:
+                upstream, _ = app._resolve_upstream()
+                if upstream:
+                    proxies = {"http": upstream, "https": upstream}
+        except Exception:
+            proxies = {}
+        resp = requests.get(url, headers={"User-Agent": _TILE_UA},
+                            proxies=proxies or None, timeout=10)
+        if resp.status_code != 200 or not resp.content:
+            logger.debug("OSM 瓦片 %s 返回 %s", url, resp.status_code)
+            return None
+        os.makedirs(_TILE_CACHE_DIR, exist_ok=True)
+        tmp = cache + f".{os.getpid()}.tmp"
+        with open(tmp, "wb") as f:
+            f.write(resp.content)
+        os.replace(tmp, cache)
+        return resp.content
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("OSM 瓦片获取失败 %s: %s", url, exc)
+        return None
+
+
 def _pid_listening_on_port(port: int) -> list:
     """Windows: 用 netstat 找出监听该端口的 PID（无 psutil 依赖）。
 
@@ -1169,6 +1216,10 @@ class ControlApiHandler:
                         "candidates": cands,
                         "mirrors": mirrors,
                         "intercept": bool(app._proxy_set_by_us),
+                        "cookies": {
+                            "tuxun": bool(os.getenv("TUXUN_COOKIE", "").strip()),
+                            "geoguessr": bool(os.getenv("GEOGUESSR_COOKIE", "").strip()),
+                        },
                         "settings": ControlApiHandler._settings_snapshot(app),
                     })
                     return
@@ -1187,9 +1238,24 @@ class ControlApiHandler:
                     else:
                         self._send_bytes(404, "教程缺失".encode("utf-8"), "text/plain; charset=utf-8")
                     return
+                m = _TILE_RE.match(path)
+                if m:
+                    z, x, y = (int(g) for g in m.groups())
+                    data = _osm_tile_fetch(z, x, y, app)
+                    if data is not None:
+                        self._send_bytes(200, data, "image/png")
+                    else:
+                        self._send_bytes(502, "tile unavailable".encode("utf-8"),
+                                         "text/plain; charset=utf-8")
+                    return
                 self._send(404, {"error": "not found"})
 
             def do_POST(self):
+                if self.path.startswith("/login/"):
+                    plat = self.path.rsplit("/", 1)[-1]
+                    r = app.login_platform(plat)
+                    self._send(200, r)
+                    return
                 if self.path == "/shutdown":
                     self._send(200, {"status": "exiting"})
                     logger.info("收到网页退出请求，正在还原系统代理并退出 ...")
@@ -1430,6 +1496,77 @@ class SoloApiReader:
 # 应用主体
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 内置登录：Cookie 抓取辅助 + 独立登录窗口（--login）
+# ---------------------------------------------------------------------------
+
+def _cookies_header_for(cookies, plat: str) -> str:
+    """从 pywebview get_cookies() 结果筛出平台 Cookie 拼成请求头；未登录返回空串。
+
+    判定标准：图寻须有 fun_ticket（微信扫码登录后下发），GeoGuessr 须有 session。
+    """
+    need_domain = "tuxun" if plat == "tuxun" else "geoguessr"
+    must = "fun_ticket" if plat == "tuxun" else "session"
+    names, pairs = set(), []
+    for c in cookies or []:
+        try:
+            name, value, domain = c.name, c.value, (c.domain or "")
+        except AttributeError:
+            continue
+        if need_domain not in domain:
+            continue
+        names.add(name)
+        pairs.append(f"{name}={value}")
+    return "; ".join(pairs) if must in names else ""
+
+
+def run_standalone_login(plat: str) -> None:
+    """--login 入口：独立登录窗口。打开官网正常登录（图寻可微信扫码），
+    工具后台轮询 Cookie，抓到后自动写入 .env 并关闭窗口。"""
+    if not WEBVIEW_AVAILABLE:
+        print("未安装 pywebview，无法打开登录窗口。请执行: pip install \"pywebview>=5,<6\"")
+        return
+    import webview as _wv
+
+    label = "图寻" if plat == "tuxun" else "GeoGuessr"
+    key = "TUXUN_COOKIE" if plat == "tuxun" else "GEOGUESSR_COOKIE"
+    url = "https://tuxun.fun/" if plat == "tuxun" else "https://www.geoguessr.com/"
+    result = {"message": f"未完成 {label} 登录（窗口已关闭或 5 分钟超时）。"}
+
+    def poll(window):
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            time.sleep(2)
+            if window not in _wv.windows:  # 用户手动关窗
+                return
+            try:
+                cookies = window.get_cookies()
+            except Exception:
+                continue
+            header = _cookies_header_for(cookies, plat)
+            if header:
+                try:
+                    upsert_env_line(key, header)
+                    os.environ[key] = header
+                    result["message"] = f"{label} Cookie 已自动录入（写入 .env）"
+                    logger.info("登录窗口获取 %s Cookie 成功（值不入日志）", label)
+                except Exception as exc:
+                    result["message"] = f"Cookie 写入失败: {exc}"
+                    logger.error("%s", result["message"])
+                window.destroy()
+                return
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+    window = _wv.create_window(f"图寻助手 · 登录{label}", url, width=1100, height=800)
+    threading.Thread(target=poll, args=(window,), daemon=True, name="login-poll").start()
+    _wv.start()
+    print(f"[登录] {result['message']}")
+    logger.info("[登录] %s", result["message"])
+
+
 class TuxunApp:
     """负责捕获点分发、逆地理编码、系统代理托管与 GUI/控制台展示。"""
 
@@ -1464,6 +1601,7 @@ class TuxunApp:
         }
         self._last_seen_cookie: dict = {}
         self.pending_cookie: Optional[Tuple[str, str]] = None  # (platform, cookie_header)
+        self._login_busy = False       # 内置登录窗口进行中标记
 
     # ------------------------------------------------------------------
     # Cookie 自动录入
@@ -1521,6 +1659,86 @@ class TuxunApp:
         logger.info("Cookie 录入: 用户拒绝（平台=%s，已记忆不再询问）", plat)
         return {"status": "info",
                 "message": f"已跳过 {label}（不再询问；可删除 config.json 的 cookie_declined 重置）"}
+
+    # ------------------------------------------------------------------
+    # 内置登录窗口：打开官网让用户正常登录（图寻可扫码），自动抓 Cookie 写入 .env
+    # ------------------------------------------------------------------
+    def login_platform(self, plat: str) -> dict:
+        """（GUI）把当前窗口导航到平台官网，后台轮询 Cookie，成功后自动返回助手页面。"""
+        if plat not in ("tuxun", "geoguessr"):
+            return {"status": "error", "message": "未知平台"}
+        if getattr(self, "_login_busy", False):
+            return {"status": "info", "message": "登录已在进行中：完成登录后会自动返回。"}
+        if self.window is None:
+            return {"status": "error", "message": "图形界面不可用（控制台请用 --login tuxun/geoguessr）"}
+        self._login_busy = True
+        url = "https://tuxun.fun/" if plat == "tuxun" else "https://www.geoguessr.com/"
+        threading.Thread(target=self._login_worker, args=(plat, url),
+                         daemon=True, name="login-flow").start()
+        return {"status": "success",
+                "message": "已打开官网登录页：完成登录（图寻可微信扫码）后自动返回，无需手动复制 Cookie。"}
+
+    def cancel_login(self) -> dict:
+        """（登录页右上角浮动按钮）取消登录并返回助手页面。"""
+        self._login_busy = False
+        return {"status": "success", "message": "已取消登录"}
+
+    def _login_worker(self, plat: str, url: str) -> None:
+        label = "图寻" if plat == "tuxun" else "GeoGuessr"
+        key = "TUXUN_COOKIE" if plat == "tuxun" else "GEOGUESSR_COOKIE"
+        message = f"未完成 {label} 登录（5 分钟超时），已返回。"
+        try:
+            self.window.load_url(url)
+            deadline = time.time() + 300
+            while time.time() < deadline and self._login_busy:
+                time.sleep(2)
+                try:
+                    cookies = self.window.get_cookies()
+                except Exception:
+                    continue
+                self._inject_login_back_button()
+                header = _cookies_header_for(cookies, plat)
+                if header:
+                    try:
+                        upsert_env_line(key, header)
+                        os.environ[key] = header
+                        self.cookies_known[plat] = True
+                        if plat == "tuxun":
+                            self.api_reader.refresh_agent()
+                        message = f"{label} Cookie 已自动录入（写入 .env，镜像即时生效）"
+                        logger.info("登录窗口获取 %s Cookie 成功（值不入日志）", label)
+                    except Exception as exc:
+                        message = f"Cookie 写入失败: {exc}"
+                        logger.error("%s", message)
+                    break
+        except Exception as exc:  # noqa: BLE001
+            message = f"登录窗口异常: {exc}"
+            logger.error("%s", message)
+        finally:
+            self._login_busy = False
+            try:
+                self.window.load_html(self.build_html())
+                self.window.evaluate_js(
+                    "window.setStatus && window.setStatus(%s)"
+                    % json.dumps(message, ensure_ascii=False))
+            except Exception:
+                pass
+            print(f"[登录] {message}")
+
+    def _inject_login_back_button(self) -> None:
+        """在官网登录页右上角注入「返回助手」浮动按钮（尽力而为，失败不影响登录）。"""
+        try:
+            self.window.evaluate_js(
+                "(function(){if(window.__TX_LOGIN_BTN)return;window.__TX_LOGIN_BTN=1;"
+                "if(!document.body)return;var b=document.createElement('div');"
+                "b.innerText='← 返回图寻助手';"
+                "b.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;"
+                "background:#1b2438;color:#ffd700;border:1px solid #33456e;border-radius:6px;"
+                "padding:6px 12px;cursor:pointer;font:13px Microsoft YaHei';"
+                "b.onclick=function(){if(window.pywebview&&pywebview.api)pywebview.api.cancel_login();};"
+                "document.body.appendChild(b);})()")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # AI 自动分析
@@ -2217,12 +2435,18 @@ def main() -> None:
     parser.add_argument("--proxy", action="store_true", help="启动后立即开启拦截并接管系统代理")
     parser.add_argument("--mirror", action="store_true",
                         help="开启图寻镜像（免证书免系统代理）：浏览器访问 http://127.0.0.1:镜像端口 做题")
+    parser.add_argument("--login", choices=["tuxun", "geoguessr"], metavar="平台",
+                        help="打开官网登录窗口（图寻可微信扫码），自动抓取 Cookie 写入 .env 后退出")
     parser.add_argument("--install-cert", action="store_true", help="安装 mitmproxy 根证书后退出")
     parser.add_argument("--no-system-proxy", action="store_true", help="不自动改系统代理（浏览器手动设置）")
     args = parser.parse_args()
 
     if args.install_cert:
         install_mitm_cert()
+        return
+
+    if args.login:
+        run_standalone_login(args.login)
         return
 
     if not MITMPROXY_AVAILABLE:
@@ -2278,7 +2502,8 @@ def main() -> None:
         started = []
         for kind, pkey, default in (("tuxun", "mirror_port", 8001), ("geoguessr", "mirror_port_geo", 8002)):
             if kind == "geoguessr" and not cookies.get("geoguessr"):
-                logger.info("GeoGuessr 镜像跳过：未配置 GEOGUESSR_COOKIE。")
+                logger.info("GeoGuessr 镜像跳过：未配置 GEOGUESSR_COOKIE"
+                            "（可运行 --login geoguessr，或在图形界面点「登录Geo」自动获取）。")
                 continue
             port_k = int(config.get(f"mirror_port_{kind}", default)) if kind == "geoguessr" else int(config.get("mirror_port", default))
             start_mirror_server(app, kind, port_k, int(config.get("control_port", 18080)), mirrors)

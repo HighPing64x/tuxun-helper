@@ -172,6 +172,47 @@ def test_overlay_v2():
     print("7. 悬浮窗 v2：设置抽屉 + ws 钩子 + 一键分数: 通过")
 
 
+def test_tiles_and_login_route():
+    app, rw = make()
+    ControlApiHandler._started = False
+    ControlApiHandler.start(app, 18182, {})
+    time.sleep(0.3)
+    import urllib.request as rq
+    http = rq.build_opener(rq.ProxyHandler({}))
+
+    # 越界瓦片：不触网直接 502（校验路由与参数防护）
+    try:
+        http.open("http://127.0.0.1:18182/tiles/osm/30/0/0.png", timeout=5)
+        raise AssertionError("越界瓦片应 502")
+    except rq.HTTPError as e:
+        assert e.code == 502, e.code
+    # 非瓦片路径 404
+    try:
+        http.open("http://127.0.0.1:18182/tiles/osm/junk", timeout=5)
+        raise AssertionError("垃圾路径应 404")
+    except rq.HTTPError as e:
+        assert e.code == 404, e.code
+    # 登录触发端点（控制台无窗口，应返回可读提示而非崩溃）
+    req = rq.Request("http://127.0.0.1:18182/login/tuxun", data=b"", method="POST")
+    j = json.loads(http.open(req, timeout=8).read())
+    assert j["status"] in ("error", "info", "success") and j.get("message"), j
+    print("8. OSM 瓦片路由校验 + /login 端点: 通过")
+
+
+def test_login_cookie_header():
+    import http.cookiejar as cj
+    c1 = cj.Cookie(0, "fun_ticket", "abc", None, False, "tuxun.fun", True, False,
+                   "/", False, False, None, False, None, None, {})
+    c2 = cj.Cookie(0, "session", "xyz", None, False, ".geoguessr.com", True, False,
+                   "/", False, False, None, False, None, None, {})
+    assert tuxun_proxy._cookies_header_for([c1, c2], "tuxun") == "fun_ticket=abc"
+    assert tuxun_proxy._cookies_header_for([c1, c2], "geoguessr") == "session=xyz"
+    c3 = cj.Cookie(0, "__cf_bm", "zzz", None, False, ".geoguessr.com", True, False,
+                   "/", False, False, None, False, None, None, {})
+    assert tuxun_proxy._cookies_header_for([c3], "geoguessr") == "", "无 session 应返回空"
+    print("9. 登录 Cookie 提取与判定: 通过")
+
+
 if __name__ == "__main__":
     test_rewrite()
     test_set_cookie()
@@ -180,4 +221,6 @@ if __name__ == "__main__":
     test_control_api()
     test_index_and_tutorial()
     test_overlay_v2()
+    test_tiles_and_login_route()
+    test_login_cookie_header()
     print("== 镜像模式单元测试全部通过 ==")
