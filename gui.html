@@ -108,9 +108,9 @@
             <label>地图缩放:</label><input type="number" id="zoom" min="2" max="18">
             <label>瓦片源:</label>
             <select id="tiles">
-                <option value="osm">OSM 标准</option>
-                <option value="amap">高德地图（国内推荐）</option>
+                <option value="amap">高德地图（推荐）</option>
                 <option value="arcgis">ArcGIS 卫星</option>
+                <option value="osm">OSM 标准（可能 403）</option>
             </select>
         </div>
         <div class="row">
@@ -161,7 +161,7 @@
 
 <script>
 var cfg = __CONFIG_JSON__;
-var currentTiles = cfg.map_tiles || 'osm';
+var currentTiles = cfg.map_tiles || 'amap';
 var map, marker, tileLayer = null, candMarker = null;
 var points = [];          // 本次会话捕获的全部点
 var current = null;       // 地址栏当前展示的点
@@ -229,7 +229,7 @@ function api() { return (window.pywebview && pywebview.api) ? pywebview.api : nu
 
 /* ---------------- 瓦片源 ---------------- */
 function setTiles(name) {
-    if (!tileConfigs[name]) name = 'osm';
+    if (!tileConfigs[name]) name = 'amap';
     currentTiles = name;
     if (tileLayer) map.removeLayer(tileLayer);
     var c = tileConfigs[name];

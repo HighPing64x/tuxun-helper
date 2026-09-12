@@ -233,7 +233,7 @@ python main.py --draw
 | `proxy_port` | 本地代理端口 | `8080` |
 | `proxy_enabled` | 下次启动自动开启拦截 | `false` |
 | `display_delay` | 捕获到坐标后的显示延迟（秒） | `0.4` |
-| `map_tiles` | 瓦片源：`osm` / `amap` / `arcgis` | `osm` |
+| `map_tiles` | 瓦片源：`amap`（高德，**默认**）/ `arcgis` / `osm`。⚠ OSM 已按其瓦片使用政策对本应用类访问返回 403（[osm.wiki/Blocked](https://osm.wiki/Blocked)），默认已改高德，OSM 仅供手动尝试 | `amap` |
 | `map_zoom` | 地图初始缩放 | `5` |
 | `amap_key` | 高德 Web 服务 Key（已内置默认 Key，开箱即用） | 内置 |
 | `upstream_proxy` | 上级代理。**留空 = 自动跟随系统已有代理（Clash 自适应）** | 空（自动） |

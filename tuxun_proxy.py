@@ -110,7 +110,7 @@ DEFAULT_CONFIG = {
     "proxy_port": 8080,       # 本地代理端口
     "display_delay": 0.4,     # 捕获到坐标后的显示延迟（秒），缓解瞬间跳图
     "map_zoom": 5,            # 地图初始缩放级别
-    "map_tiles": "osm",       # 瓦片源: osm / amap / arcgis
+    "map_tiles": "amap",      # 瓦片源: amap（高德，默认）/ arcgis / osm（OSM 已对应用类 403 限制，慎选）
     "amap_key": DEFAULT_AMAP_KEY,     # 高德 Web服务 Key（已内置默认，可在 config.json 覆盖）
     "amap_js_key": DEFAULT_AMAP_JS_KEY,  # 高德 JS Key（预留）
     "log_history": True,      # 是否把捕获点写入 history.jsonl
@@ -149,6 +149,11 @@ def load_config() -> dict:
             logger.info("配置文件已读取: %s", applog.sanitize_json(config))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("config.json 读取失败，使用默认配置: %s", exc)
+    if config.get("map_tiles") == "osm":
+        # OSM 瓦片服务器已对本应用类访问实施 403 限制（osm.wiki/Blocked），
+        # 老配置一次性迁移到高德；OSM 仍可在 GUI 手动选择。
+        config["map_tiles"] = "amap"
+        logger.info("瓦片源从 osm 迁移为 amap（OSM 已 403 限制应用类访问）。")
     return config
 
 
@@ -2097,17 +2102,21 @@ class TuxunApp:
 
 def print_banner(app: TuxunApp, auto_proxy: bool, mirror_on: bool = False) -> None:
     upstream, upstream_desc = app._resolve_upstream()
+    cport = int(app.config.get("control_port", 18080))
     print("=" * 56)
     print("  图寻助手 · 实时取点（支持 图寻 / GeoGuessr）")
-    print(f"  本地代理: http://127.0.0.1:{app.port}")
+    print(f"  拦截代理端口: 127.0.0.1:{app.port}（仅代理协议，浏览器不要直接打开）")
     if WINDOWS:
         print(f"  系统代理: {'已接管' if auto_proxy else '未接管（点击界面/查看下方提示）'}")
     else:
         print(f"  非 Windows：请在浏览器中手动设置 HTTP 代理为 127.0.0.1:{app.port}")
     print(f"  上级代理: {upstream_desc + '（自动级联）' if upstream_desc else '直连'}")
+    print(f"  选择页/网页控制台: http://127.0.0.1:{cport}/")
     if mirror_on:
         mport = int(app.config.get("mirror_port", 8001))
+        gport = int(app.config.get("mirror_port_geo", 8002))
         print(f"  图寻镜像: http://127.0.0.1:{mport}（免证书，浏览器直接访问做题）")
+        print(f"  Geo镜像: http://127.0.0.1:{gport}（需 .env 配置 GEOGUESSR_COOKIE）")
     print("  平台识别: 按请求来源自动标注 图寻 / GeoGuessr")
     print("  证书: 首次使用请安装（--install-cert / 见 README）")
     print("=" * 56)
@@ -2303,7 +2312,7 @@ def main() -> None:
     if not app.server.running:
         upstream, _ = app._resolve_upstream()
         app.server.start(upstream)
-        print(f"本地代理已启动: http://127.0.0.1:{app.port}，等待捕获街景坐标 ...\n")
+        print(f"拦截代理端口 127.0.0.1:{app.port} 已启动（仅代理协议，浏览器不要直接打开这个端口），等待捕获街景坐标 ...\n")
 
     if args.tui:
         try:
