@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>图寻助手 · 选择平台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #060608; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #e8e8f0; cursor: default;
+    background: radial-gradient(ellipse at 50% 60%, #12121c 0%, #060608 70%);
+    transition: background 0.6s ease;
+  }
+  body.side-hover-left  { background: radial-gradient(ellipse at 28% 60%, #1a1420 0%, #060608 70%); }
+  body.side-hover-right { background: radial-gradient(ellipse at 72% 60%, #101a24 0%, #060608 70%); }
+
+  /* ---- 中央射线（贯穿全屏的双向细线）---- */
+  #ray-v {
+    position: fixed; left: 50%; top: 0; width: 1px; height: 100%;
+    background: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.75) 30%,
+                rgba(255,255,255,.9) 50%, rgba(255,255,255,.75) 70%, transparent 100%);
+    transform: translateX(-50%); pointer-events: none; z-index: 5;
+    transition: opacity .5s ease, width .4s ease;
+  }
+  #ray-h {
+    position: fixed; top: 50%; left: 0; height: 1px; width: 100%;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.28) 50%, transparent 100%);
+    transform: translateY(-50%); pointer-events: none; z-index: 5;
+    transition: opacity .5s ease;
+  }
+  body.ring-open #ray-v, body.ring-open #ray-h { opacity: .18; }
+
+  /* ---- 白点 ---- */
+  #dot {
+    position: fixed; left: 50%; top: 50%; z-index: 20;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #fff; transform: translate(-50%,-50%);
+    box-shadow: 0 0 18px 4px rgba(255,255,255,.55);
+    cursor: pointer; transition: box-shadow .35s ease;
+  }
+  #dot:hover { box-shadow: 0 0 30px 8px rgba(255,255,255,.75); }
+
+  /* ---- 悬停侧：内容放大 + 光晕 ---- */
+  .side {
+    position: fixed; top: 0; height: 100%; width: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 10; cursor: pointer; transition: transform .55s cubic-bezier(.22,.9,.3,1), opacity .45s ease, filter .45s ease;
+    opacity: .5; filter: saturate(.4) brightness(.8);
+  }
+  .side.left  { left: 0; }
+  .side.right { right: 0; }
+  .side .icon { width: 92px; height: 92px; margin-bottom: 22px; opacity: .9; transition: transform .55s cubic-bezier(.22,.9,.3,1); }
+  .side .name { font-size: 34px; letter-spacing: 10px; font-weight: 300; color: #fff; opacity: .85; }
+  .side .sub  { margin-top: 10px; font-size: 12px; letter-spacing: 4px; color: #6a6a80; }
+  .side .underline { width: 46px; height: 2px; margin-top: 16px; background: #555; transition: width .5s ease, background .5s ease; }
+  .side:hover { opacity: 1; filter: none; transform: scale(1.045); }
+  .side:hover .icon { transform: scale(1.12); }
+  .side:hover .name { opacity: 1; text-shadow: 0 0 24px rgba(255,255,255,.35); }
+  .side:hover .underline { width: 110px; background: #fff; }
+  .side.left:hover  .icon  { filter: drop-shadow(0 0 14px rgba(255,120,80,.55)); }
+  .side.left:hover  .underline { background: #ff7850; }
+  .side.right:hover .icon  { filter: drop-shadow(0 0 14px rgba(90,190,255,.55)); }
+  .side.right:hover .underline { background: #5ab8ff; }
+  body.side-hover-left  .side.right, body.side-hover-right .side.left { opacity: .18; filter: saturate(0) brightness(.5); transform: scale(.96); }
+
+  /* ---- 白点展开的圆环（悬停白点）---- */
+  #ring {
+    position: fixed; left: 50%; top: 50%; z-index: 30;
+    width: 0; height: 0; border-radius: 50%;
+    transform: translate(-50%,-50%) scale(.2); opacity: 0;
+    border: 2px solid rgba(255,255,255,.9);
+    box-shadow: 0 0 60px 12px rgba(255,255,255,.18), inset 0 0 60px rgba(255,255,255,.06);
+    transition: width .45s cubic-bezier(.22,.9,.3,1), height .45s cubic-bezier(.22,.9,.3,1),
+                opacity .35s ease, transform .45s cubic-bezier(.22,.9,.3,1);
+    pointer-events: none;
+  }
+  body.ring-open #ring {
+    width: 30vmin; height: 30vmin; opacity: 1;
+    transform: translate(-50%,-50%) scale(1); pointer-events: auto;
+  }
+  .ring-item {
+    position: absolute; background: rgba(16,16,24,.94); border: 1px solid rgba(255,255,255,.22);
+    border-radius: 6px; padding: 10px 16px; text-align: center; cursor: pointer;
+    font-size: 12px; color: #cfcfe0; white-space: nowrap;
+    opacity: 0; transform: scale(.7); transition: opacity .3s ease .15s, transform .3s ease .15s, background .2s;
+  }
+  .ring-item:hover { background: rgba(40,40,58,.96); color: #fff; border-color: rgba(255,255,255,.5); }
+  .ring-item .ri-title { font-size: 13px; color: #fff; margin-bottom: 2px; }
+  .ring-item .ri-sub { font-size: 10px; color: #7a7a90; }
+  body.ring-open .ring-item { opacity: 1; transform: scale(1); }
+  /* 三分区位置：上 / 左下 / 右下 */
+  .ring-item.top    { left: 50%; top: -58px; transform: translate(-50%,-100%) scale(.7); }
+  body.ring-open .ring-item.top    { transform: translate(-50%,-100%) scale(1); }
+  .ring-item.bl     { left: -30px; bottom: -14px; }
+  .ring-item.br     { right: -30px; bottom: -14px; }
+
+  /* ---- 状态条 ---- */
+  #status {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 40;
+    font-size: 11px; color: #55556a; letter-spacing: 1px;
+  }
+  #status b { color: #8a8aa8; font-weight: normal; }
+
+  /* ---- 标题 ---- */
+  #title {
+    position: fixed; top: 34px; left: 50%; transform: translateX(-50%); z-index: 40;
+    font-size: 15px; letter-spacing: 8px; color: #8a8aa8; font-weight: 300;
+  }
+  a { color: inherit; text-decoration: none; }
+</style>
+</head>
+<body>
+  <div id="ray-v"></div>
+  <div id="ray-h"></div>
+  <div id="dot" title="图寻助手"></div>
+  <div id="ring">
+    <div class="ring-item top" id="ri-contrib">
+      <div class="ri-title">贡献者</div>
+      <div class="ri-sub">HighPing64x · haczmrh</div>
+    </div>
+    <div class="ring-item bl" id="ri-exit">
+      <div class="ri-title">退出</div>
+      <div class="ri-sub">关闭本工具</div>
+    </div>
+    <div class="ring-item br" id="ri-gh">
+      <div class="ri-title">GitHub</div>
+      <div class="ri-sub">HighPing64x/tuxun-helper</div>
+    </div>
+  </div>
+
+  <div class="side left" id="side-tuxun">
+    <svg class="icon" viewBox="0 0 64 64" fill="none">
+      <path d="M32 4C18 4 8 14 8 27c0 15 20 30 24 33 4-3 24-18 24-33C56 14 46 4 32 4z"
+            stroke="#ff7850" stroke-width="3" fill="rgba(255,120,80,.08)"/>
+      <text x="32" y="34" text-anchor="middle" font-size="18" fill="#ff7850"
+            font-family="Microsoft YaHei" font-weight="bold">寻</text>
+    </svg>
+    <div class="name">图 寻</div>
+    <div class="sub">TUXUN · 每日挑战 / 积分赛 / 镜像做题</div>
+    <div class="underline"></div>
+  </div>
+
+  <div class="side right" id="side-geo">
+    <svg class="icon" viewBox="0 0 64 64" fill="none">
+      <circle cx="32" cy="32" r="24" stroke="#5ab8ff" stroke-width="3" fill="rgba(90,184,255,.08)"/>
+      <ellipse cx="32" cy="32" rx="11" ry="24" stroke="#5ab8ff" stroke-width="2"/>
+      <path d="M9 24h46M9 40h46" stroke="#5ab8ff" stroke-width="2"/>
+      <circle cx="32" cy="32" r="3.4" fill="#5ab8ff"/>
+    </svg>
+    <div class="name">GEOGUESSR</div>
+    <div class="sub">每日挑战 / 经典地图 / 复盘</div>
+    <div class="underline"></div>
+  </div>
+
+  <div id="title">TUXUN HELPER</div>
+  <div id="status">镜像状态加载中…</div>
+
+<script>
+/* ---- 状态轮询（镜像/拦截运行状态），全部走同源相对路径 ---- */
+var mirrorPorts = {};
+function refresh() {
+  fetch('/state').then(r => r.json()).then(st => {
+    mirrorPorts = st.mirrors || {};
+    var t = mirrorPorts.tuxun ? '运行中' : '未启动';
+    var g = mirrorPorts.geoguessr ? '运行中' : '未启动';
+    document.getElementById('status').innerHTML =
+      '图寻镜像 <b>' + t + '</b> ｜ GeoGuessr 镜像 <b>' + g + '</b> ｜ 拦截 <b>' +
+      (st.intercept ? '运行中' : '未启动') + '</b>' +
+      (mirrorPorts.tuxun ? ' ｜ 左侧进入 <b>127.0.0.1:' + mirrorPorts.tuxun + '</b>' : '') +
+      (mirrorPorts.geoguessr ? ' ｜ 右侧 <b>127.0.0.1:' + mirrorPorts.geoguessr + '</b>' : '');
+  }).catch(() => {
+    document.getElementById('status').innerText = '后端未连接（请确认 tuxun-helper 正在运行）';
+  });
+}
+refresh(); setInterval(refresh, 3000);
+
+/* ---- 白点悬停：展开圆环 ---- */
+var dot = document.getElementById('dot');
+var ringTimer = null;
+dot.addEventListener('mouseenter', function () {
+  clearTimeout(ringTimer);
+  document.body.classList.add('ring-open');
+});
+dot.addEventListener('mouseleave', function () {
+  ringTimer = setTimeout(function () {
+    if (!document.querySelector('#ring:hover')) document.body.classList.remove('ring-open');
+  }, 260);
+});
+document.getElementById('ring').addEventListener('mouseleave', function () {
+  ringTimer = setTimeout(function () {
+    if (!dot.matches(':hover')) document.body.classList.remove('ring-open');
+  }, 260);
+});
+
+/* ---- 侧边悬停：背景切换 ---- */
+document.getElementById('side-tuxun').addEventListener('mouseenter', function () {
+  document.body.classList.add('side-hover-left'); document.body.classList.remove('side-hover-right');
+});
+document.getElementById('side-geo').addEventListener('mouseenter', function () {
+  document.body.classList.add('side-hover-right'); document.body.classList.remove('side-hover-left');
+});
+document.getElementById('side-tuxun').addEventListener('click', function () {
+  if (mirrorPorts.tuxun) location.href = 'http://127.0.0.1:' + mirrorPorts.tuxun + '/';
+  else alert('图寻镜像未启动：请确认已配置 TUXUN_COOKIE 或在启动参数加 --mirror');
+});
+document.getElementById('side-geo').addEventListener('click', function () {
+  if (mirrorPorts.geoguessr) location.href = 'http://127.0.0.1:' + mirrorPorts.geoguessr + '/';
+  else alert('GeoGuessr 镜像未启动：请先在 .env 配置 GEOGUESSR_COOKIE');
+});
+
+/* ---- 圆环三分区动作 ---- */
+document.getElementById('ri-exit').addEventListener('click', function () {
+  if (confirm('确定退出图寻助手？（系统代理设置将自动还原）')) {
+    fetch('/shutdown', { method: 'POST' });
+    document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#555;font-size:14px">图寻助手已退出，本页可以关闭了。</div>';
+  }
+});
+document.getElementById('ri-gh').addEventListener('click', function () {
+  window.open('https://github.com/HighPing64x/tuxun-helper', '_blank');
+});
+document.getElementById('ri-contrib').addEventListener('click', function () {
+  window.open('https://github.com/HighPing64x/tuxun-helper/graphs/contributors', '_blank');
+});
+</script>
+</body>
+</html>

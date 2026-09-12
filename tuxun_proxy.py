@@ -19,10 +19,15 @@
 用法：
   python tuxun_proxy.py                 # 图形界面（默认）
   python tuxun_proxy.py --console       # 纯控制台输出
+  python tuxun_proxy.py --tui           # TUI 后台仪表盘（端口/捕获状态/日志）
   python tuxun_proxy.py --proxy         # 启动即开启拦截（免点击）
+  python tuxun_proxy.py --mirror        # 开启镜像模式（免证书免系统代理）
   python tuxun_proxy.py --port 8888     # 指定代理端口
   python tuxun_proxy.py --install-cert  # 安装 mitmproxy 根证书（首次使用必读）
   python tuxun_proxy.py --no-system-proxy  # 不自动改系统代理（浏览器手动设置）
+
+选择页（深色分屏入口，白点圆环菜单）随控制端口常驻：
+  http://127.0.0.1:18080/               # 左图寻 / 右 GeoGuessr；悬停白点=贡献者/退出/GitHub
 
 仅供学习和技术交流使用，请遵守 tuxun.fun 服务条款。
 """
@@ -123,6 +128,11 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "rules": [],          # 自动学习，也可手动填 [{"match": "原名", "replace": "别名"}, ...]
     },
+    "oneclock_enabled": False,  # 一键特定分数：热键触发，按分数模型反推距离并经 ws 提交（默认关）
+    "oneclock_score": 3500,     # 一键目标分数（5000 满）
+    "oneclock_key": "F9",       # 一键热键（游戏页面获得焦点时按下生效）
+    "map_size": 0,              # 计分地图尺寸(km)：0=按回合自动（中国≈6120 / 世界≈14916）
+    "open_index": True,         # 启动后自动打开选择页（http://127.0.0.1:控制端口/）
 }
 
 
@@ -465,7 +475,9 @@ _OVERLAY_SCRIPT = """(function(){
   if (window.__TUXUN_OVERLAY__) return; window.__TUXUN_OVERLAY__ = 1;
   var API = 'http://127.0.0.1:__CONTROL_PORT__';
   var st = { origin: null, current: null, answer: null, decoys: 0, candidates: 0, round_move: null,
-             settings: { anti_decoy: true, near_m: 150, display_delay: 0.4, api_poll: false, ai_auto: false } };
+             settings: { anti_decoy: true, near_m: 150, display_delay: 0.4, api_poll: false, ai_auto: false,
+                         oneclock_enabled: false, oneclock_score: 3500, oneclock_key: 'F9', map_size: 0 } };
+  var BTN = 'background:#1a1a2e;border:1px solid #2a3350;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:11px;color:';
   var panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;background:rgba(12,15,22,.93);color:#cfe3ff;border:1px solid #2a3350;border-radius:8px;font:12px/1.6 "Microsoft YaHei",sans-serif;padding:10px 14px;min-width:270px;box-shadow:0 6px 24px rgba(0,0,0,.55);user-select:none';
   panel.innerHTML =
@@ -475,15 +487,26 @@ _OVERLAY_SCRIPT = """(function(){
     '<div>目前: <span id="tx-c" style="color:#69db7c;font-family:Consolas,monospace">-</span> <span id="tx-cd" style="color:#8fa3c2"></span></div>' +
     '<div>答案: <span id="tx-a" style="color:#4FC3F7;font-family:Consolas,monospace">-</span></div>' +
     '<div style="color:#8fa3c2">诱饵 <b id="tx-d" style="color:#d97a7a">0</b> · 候选 <b id="tx-cd2" style="color:#f0a35e">0</b> · 模式 <span id="tx-mv">-</span></div>' +
-    '<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center">' +
-    '<label style="cursor:pointer"><input type="checkbox" id="tx-ad"> 防诱饵</label>' +
-    '<label style="cursor:pointer"><input type="checkbox" id="tx-ap"> API直读</label>' +
-    '<label style="cursor:pointer"><input type="checkbox" id="tx-aia"> AI自动</label>' +
+    '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+    '<button id="tx-set" style="' + BTN + '#FFD700">⚙ 设置</button>' +
+    '<button id="tx-copy" style="' + BTN + '#00E5FF">复制原点</button>' +
+    '<button id="tx-hide" style="' + BTN + '#9fb3d9">隐藏面板</button>' +
     '</div>' +
-    '<div style="margin-top:5px;display:flex;gap:6px">' +
-    '<button id="tx-copy" style="background:#1a1a2e;color:#00E5FF;border:1px solid #2a3350;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:11px">复制原点</button>' +
-    '<button id="tx-hide" style="background:#1a1a2e;color:#9fb3d9;border:1px solid #2a3350;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:11px">隐藏面板</button>' +
-    '</div><div id="tx-tip" style="color:#55627e;font-size:11px;margin-top:2px"></div></div>';
+    '<div id="tx-tip" style="color:#55627e;font-size:11px;margin-top:2px"></div>' +
+    // ---- 设置抽屉（默认隐藏）----
+    '<div id="tx-setpanel" style="display:none;margin-top:8px;border-top:1px solid #223055;padding-top:8px">' +
+    '<div style="color:#8fa3c2;margin-bottom:4px">— 捕获 —</div>' +
+    '<label style="cursor:pointer;margin-right:10px"><input type="checkbox" id="tx-ad"> 防诱饵</label>' +
+    '<label style="cursor:pointer"><input type="checkbox" id="tx-ap"> API直读</label>' +
+    '<div style="margin-top:4px">判定距离 <input id="tx-near" type="number" step="10" style="width:56px;background:#0b0e18;color:#cfe3ff;border:1px solid #2a3350;border-radius:3px;padding:0 4px"> 米 · 延迟 <input id="tx-dd" type="number" step="0.1" style="width:52px;background:#0b0e18;color:#cfe3ff;border:1px solid #2a3350;border-radius:3px;padding:0 4px"> 秒</div>' +
+    '<div style="color:#8fa3c2;margin:6px 0 4px">— 功能 —</div>' +
+    '<label style="cursor:pointer;margin-right:10px"><input type="checkbox" id="tx-aia"> AI自动</label>' +
+    '<label style="cursor:pointer"><input type="checkbox" id="tx-np"> 名称保护</label>' +
+    '<div style="color:#8fa3c2;margin:6px 0 4px">— 一键特定分数 —</div>' +
+    '<label style="cursor:pointer"><input type="checkbox" id="tx-oc"> 启用</label>' +
+    '<div style="margin-top:4px">目标分数 <input id="tx-ocs" type="number" step="50" min="200" max="4990" style="width:64px;background:#0b0e18;color:#cfe3ff;border:1px solid #2a3350;border-radius:3px;padding:0 4px"> · 热键 <input id="tx-ock" readonly placeholder="点击录入" style="width:74px;background:#0b0e18;color:#FFD700;border:1px solid #2a3350;border-radius:3px;padding:0 4px;cursor:pointer"></div>' +
+    '<div id="tx-ocinfo" style="color:#55627e;font-size:11px;margin-top:2px">在游戏中按热键 = 以该分数对应的距离自动落点提交</div>' +
+    '</div></div>';
   function mount(){ document.body.appendChild(panel); }
   if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
 
@@ -499,15 +522,27 @@ _OVERLAY_SCRIPT = """(function(){
     document.getElementById('tx-d').innerText = st.decoys;
     document.getElementById('tx-cd2').innerText = st.candidates;
     document.getElementById('tx-mv').innerText = st.round_move === true ? '可移动' : (st.round_move === false ? '无移动' : '-');
-    var boxes = { 'tx-ad': st.settings.anti_decoy, 'tx-ap': st.settings.api_poll, 'tx-aia': st.settings.ai_auto };
-    for (var id in boxes) { var el = document.getElementById(id); if (el && document.activeElement !== el) el.checked = boxes[id]; }
+    var s = st.settings || {};
+    var boxes = { 'tx-ad': s.anti_decoy, 'tx-ap': s.api_poll, 'tx-aia': s.ai_auto,
+                  'tx-np': s.name_protect, 'tx-oc': s.oneclock_enabled };
+    for (var id in boxes) { var el = document.getElementById(id); if (el && document.activeElement !== el) el.checked = !!boxes[id]; }
+    function setv(id, v){ var el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; }
+    setv('tx-near', s.near_m != null ? s.near_m : 150);
+    setv('tx-dd', s.display_delay != null ? s.display_delay : 0.4);
+    setv('tx-ocs', s.oneclock_score != null ? s.oneclock_score : 3500);
+    var k = document.getElementById('tx-ock'); if (k && document.activeElement !== k) k.value = s.oneclock_key || 'F9';
+    var info = document.getElementById('tx-ocinfo');
+    if (info) info.innerText = st.origin
+      ? ('真值就绪：按 ' + (s.oneclock_key || 'F9') + ' 即按 ' + (s.oneclock_score || 3500) + ' 分落点')
+      : '等待捕获本回合真值（API直读/答案揭示后可用）';
   }
   function poll(){
     fetch(API + '/state').then(function(r){ return r.json(); }).then(function(j){ st = j; render(); }).catch(function(){});
   }
   function save(extra){
     var body = {};
-    for (var k in st.settings) body[k] = st.settings[k];
+    var s = st.settings || {};
+    for (var k in s) body[k] = s[k];
     for (var k2 in (extra || {})) body[k2] = extra[k2];
     fetch(API + '/settings', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -518,18 +553,96 @@ _OVERLAY_SCRIPT = """(function(){
       .catch(function(){});
   }
   document.addEventListener('change', function(e){
-    var map = { 'tx-ad': 'anti_decoy', 'tx-ap': 'api_poll', 'tx-aia': 'ai_auto' };
+    var map = { 'tx-ad': 'anti_decoy', 'tx-ap': 'api_poll', 'tx-aia': 'ai_auto', 'tx-oc': 'oneclock_enabled' };
+    var num = { 'tx-near': 'near_m', 'tx-dd': 'display_delay', 'tx-ocs': 'oneclock_score' };
     if (map[e.target.id]) { var ex = {}; ex[map[e.target.id]] = e.target.checked; save(ex); }
+    else if (num[e.target.id]) { var ex2 = {}; ex2[num[e.target.id]] = parseFloat(e.target.value) || 0; save(ex2); }
   });
+  // 热键录入
+  document.addEventListener('click', function(e){
+    if (e.target.id === 'tx-ock') { e.target.value = '按下任意键…'; e.target.dataset.rec = '1'; }
+  });
+  document.addEventListener('keydown', function(e){
+    var rec = document.getElementById('tx-ock');
+    if (rec && rec.dataset.rec) {
+      e.preventDefault(); e.stopPropagation();
+      rec.dataset.rec = ''; rec.value = e.key;
+      var ex = {}; ex.oneclock_key = e.key; save(ex);
+      return;
+    }
+    oneClock(e);
+  }, true);
+
+  /* ================= 一键特定分数 =================
+   * 原理：镜像页面的 ws 已被改写为本地 ws://127.0.0.1:端口。
+   * 在页面脚本运行前钩住 WebSocket.prototype.send，捕获承载
+   * {"scope":"tuxun"} 消息的游戏 socket；热键触发时按
+   * score = 5000*exp(-10*d/size) 反推距离 d，向该 socket 发送
+   * pin + confirm，与手动点击地图落点完全同构。 */
+  var gameSock = null, seenSocks = [];
+  try {
+    var _send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+      try {
+        if (seenSocks.indexOf(this) < 0) { seenSocks.push(this); if (seenSocks.length > 6) seenSocks.shift(); }
+        var s = typeof data === 'string' ? data : '';
+        if (s.indexOf('"scope":"tuxun"') >= 0 || s.indexOf('scope\\":\\"tuxun') >= 0) gameSock = this;
+      } catch (err) {}
+      return _send.apply(this, arguments);
+    };
+  } catch (err) {}
+  function distForScore(score, sizeKm) {
+    var s = Math.min(4990, Math.max(200, +score || 3500));
+    return (sizeKm / 10.0) * Math.log(5000.0 / s);
+  }
+  function destPoint(lat, lng, distKm, bearingDeg) {
+    var R = 6371.0, br = bearingDeg * Math.PI / 180, la = lat * Math.PI / 180, lo = lng * Math.PI / 180;
+    var la2 = Math.asin(Math.sin(la) * Math.cos(distKm / R) + Math.cos(la) * Math.sin(distKm / R) * Math.cos(br));
+    var lo2 = lo + Math.atan2(Math.sin(br) * Math.sin(distKm / R) * Math.cos(la),
+                              Math.cos(distKm / R) - Math.sin(la) * Math.sin(la2));
+    return { lat: la2 * 180 / Math.PI, lng: ((lo2 * 180 / Math.PI + 540) % 360) - 180 };
+  }
+  function wsSend(obj) {
+    if (!gameSock) { // 退化：挑最近开着的 socket
+      for (var i = seenSocks.length - 1; i >= 0; i--) {
+        try { if (seenSocks[i].readyState === 1) { gameSock = seenSocks[i]; break; } } catch (err) {}
+      }
+    }
+    if (!gameSock) return false;
+    try { gameSock.send(JSON.stringify(obj)); return true; } catch (err) { return false; }
+  }
+  function oneClock(e) {
+    var s = st.settings || {};
+    if (!s.oneclock_enabled) return;
+    if (!e || e.key !== (s.oneclock_key || 'F9')) return;
+    var tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (!st.origin) { tipMsg('一键分数：尚未捕获本回合真值'); return; }
+    var coord = st.coord || 'wgs84';
+    var size = +s.map_size || 0;
+    if (!size) size = (coord === 'gcj02' || coord === 'bd09') ? 6120 : 14916;  // 中国图 / 世界图
+    var d = distForScore(s.oneclock_score, size);
+    var guess = destPoint(st.origin.lat, st.origin.lng, d, Math.random() * 360);
+    var ok1 = wsSend({ scope: 'tuxun', data: { type: 'pin', lat: guess.lat, lng: guess.lng } });
+    var ok2 = wsSend({ scope: 'tuxun', data: { type: 'confirm', lat: guess.lat, lng: guess.lng } });
+    tipMsg(ok1 && ok2
+      ? '一键落点 ' + Math.round(d) + ' km ≈ ' + s.oneclock_score + ' 分（' + fmt(guess) + '）'
+      : '一键落点失败：未捕获游戏 ws 连接（需先进入对局）');
+  }
+  function tipMsg(t){ var tip = document.getElementById('tx-tip'); if (tip) { tip.innerText = t; setTimeout(function(){ tip.innerText=''; }, 3000); } }
+
   document.addEventListener('click', function(e){
     if (e.target.id === 'tx-fold') {
       hidden = !hidden;
       document.getElementById('tx-body').style.display = hidden ? 'none' : 'block';
       document.getElementById('tx-fold').innerText = hidden ? '[展开]' : '[收起]';
+    } else if (e.target.id === 'tx-set') {
+      var p = document.getElementById('tx-setpanel');
+      p.style.display = (p.style.display === 'none') ? 'block' : 'none';
     } else if (e.target.id === 'tx-copy') {
       var t = st.origin ? (+st.origin.lat).toFixed(6) + ', ' + (+st.origin.lng).toFixed(6) : '';
       if (t && navigator.clipboard) navigator.clipboard.writeText(t)
-        .then(function(){ var tip=document.getElementById('tx-tip'); if(tip) {tip.innerText='已复制'; setTimeout(function(){tip.innerText='';},1500);} });
+        .then(function(){ tipMsg('已复制'); });
     } else if (e.target.id === 'tx-hide') {
       panel.style.display = 'none';
       var btn = document.createElement('div');
@@ -541,13 +654,12 @@ _OVERLAY_SCRIPT = """(function(){
   });
   (function drag(){
     var sx=0, sy=0, ox=12, oy=12, on=false;
-    var head = document.getElementById('tx-head');
     document.addEventListener('mousemove', function(e){ if(!on) return;
       panel.style.left = (ox + e.clientX - sx) + 'px'; panel.style.bottom = 'auto';
       panel.style.top = (oy + e.clientY - sy) + 'px'; });
     document.addEventListener('mouseup', function(){ on = false; });
-    document.addEventListener('DOMContentLoaded', function(){ if(document.getElementById('tx-head'))
-      document.getElementById('tx-head').addEventListener('mousedown', function(e){ on=true; sx=e.clientX; sy=e.clientY; e.preventDefault(); }); });
+    document.addEventListener('DOMContentLoaded', function(){ var h=document.getElementById('tx-head');
+      if (h) h.addEventListener('mousedown', function(e){ on=true; sx=e.clientX; sy=e.clientY; e.preventDefault(); }); });
   })();
   mount(); poll(); setInterval(poll, 1000);
 })();"""
@@ -874,11 +986,143 @@ class MirrorCookieJar:
             logger.debug("镜像会话保存失败: %s", exc)
 
 
+_WEB_DIR = os.path.join(BASE_DIR, "web")
+
+
+def _read_web_asset(name: str) -> Optional[bytes]:
+    """读取 web/ 下的静态资源（PyInstaller 打包后位于 _MEIPASS/web）。"""
+    base = getattr(sys, "_MEIPASS", None)
+    for root in ((os.path.join(base, "web") if base else None), _WEB_DIR):
+        if not root:
+            continue
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except OSError as exc:
+                logger.warning("读取 web 资源失败 %s: %s", path, exc)
+    return None
+
+
+def _graceful_exit(app: "TuxunApp") -> None:
+    """网页退出入口：还原系统代理后结束进程。"""
+    try:
+        app.restore_proxy()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("还原系统代理失败: %s", exc)
+    logger.info("========== 程序退出（网页请求） ==========")
+    os._exit(0)
+
+
+def _pid_listening_on_port(port: int) -> list:
+    """Windows: 用 netstat 找出监听该端口的 PID（无 psutil 依赖）。
+
+    注意：netstat/tasklist 在中文 Windows 输出 GBK（cp936），必须用 mbcs 解码，
+    不能用默认 text=True（UTF-8 读取会在解码线程直接崩掉）。
+    """
+    pids = set()
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True,
+                             timeout=8).stdout.decode("mbcs", errors="replace")
+    except Exception:  # noqa: BLE001
+        return []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[3] == "LISTENING" and parts[1].endswith(f":{port}"):
+            try:
+                pids.add(int(parts[4]))
+            except ValueError:
+                pass
+    return sorted(p for p in pids if p)
+
+
+def _pid_name(pid: int) -> str:
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                             capture_output=True, timeout=8).stdout.decode("mbcs", errors="replace")
+        row = out.strip().splitlines()
+        if row and '","' in row[0]:
+            return row[0].split('","')[0].strip('"')
+    except Exception:  # noqa: BLE001
+        pass
+    return f"PID {pid}"
+
+
+def ensure_ports_free(wanted: dict, interactive: bool = True) -> bool:
+    """互斥锁：启动前检查端口占用，被占用时询问用户「退出 / 结束占用进程」。
+
+    wanted: {端口: 用途描述}；返回 True=可以继续启动，False=用户选择退出。
+    """
+    conflicts = {}
+    for port, usage in wanted.items():
+        pids = _pid_listening_on_port(port)
+        if pids:
+            conflicts[port] = (usage, pids)
+    if not conflicts:
+        return True
+    lines = ["检测到以下端口已被其他进程占用（多开互斥检查）："]
+    kill_pids = set()
+    for port, (usage, pids) in conflicts.items():
+        names = ", ".join(f"{_pid_name(p)}({p})" for p in pids)
+        lines.append(f"  端口 {port} [{usage}] <- {names}")
+        kill_pids.update(pids)
+    lines.append("")
+    lines.append("  [1] 直接退出本程序（推荐：先关掉旧窗口）")
+    lines.append("  [2] 结束占用进程并继续启动本程序")
+    print("\n".join(lines))
+    if not interactive:
+        return False
+    try:
+        choice = input("请选择 (1/2，回车=1): ").strip()
+    except (EOFError, OSError):
+        return False
+    if choice != "2":
+        return False
+    for pid in kill_pids:
+        # 只允许结束确定占用端口的进程，避免误杀
+        if pid == os.getpid():
+            continue
+        print(f"  结束进程 {pid} ({_pid_name(pid)}) ...")
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=8)
+    time.sleep(1.2)
+    still = [p for p in wanted if _pid_listening_on_port(p)]
+    if still:
+        print(f"端口 {still} 仍被占用（可能需要管理员权限），本次退出。")
+        return False
+    return True
+
+
 class ControlApiHandler:
-    """悬浮窗的数据/设置 API（仅监听 127.0.0.1）。"""
+    """控制 API + 选择页主页服务（仅监听 127.0.0.1）。
+
+    GET  /            选择页（web/index.html，深色分屏入口）
+    GET  /state       悬浮窗/选择页状态轮询
+    GET  /tutorial.md 打包进 exe 的使用教程（纯文本）
+    POST /settings    设置更新（悬浮窗设置抽屉 / 选择页）
+    POST /shutdown    退出程序（先还原系统代理）
+    """
+
+    _started = False  # 双镜像共用一个控制端口，避免二次绑定报错
 
     @staticmethod
-    def make_handler(app: "TuxunApp"):
+    def _settings_snapshot(app: "TuxunApp") -> dict:
+        np = app.config.get("name_protect") or {}
+        return {
+            "anti_decoy": app.config.get("anti_decoy", True),
+            "near_m": app.config.get("near_m", 150),
+            "display_delay": app.config.get("display_delay", 0.4),
+            "api_poll": bool(app.config.get("api_poll")),
+            "ai_auto": bool(app.config.get("ai_auto")),
+            "name_protect": bool(np.get("enabled")),
+            "oneclock_enabled": bool(app.config.get("oneclock_enabled")),
+            "oneclock_score": app.config.get("oneclock_score", 3500),
+            "oneclock_key": app.config.get("oneclock_key", "F9"),
+            "map_size": app.config.get("map_size", 0),
+        }
+
+    @staticmethod
+    def make_handler(app: "TuxunApp", mirrors: dict):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         class Handler(BaseHTTPRequestHandler):
@@ -892,34 +1136,60 @@ class ControlApiHandler:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def _send_bytes(self, code, data: bytes, ctype: str):
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
             def do_GET(self):
-                if self.path != "/state":
-                    self._send(404, {"error": "not found"})
+                path = self.path.split("?")[0]
+                if path == "/state":
+                    origin = app._round_anchor
+                    with app._lock:
+                        cur = app._cur_pos
+                        ans = app._last_answer
+                        decoys = sum(1 for r in app._history if r.get("decoy"))
+                        cands = sum(1 for r in app._history if r.get("candidate"))
+                    self._send(200, {
+                        "origin": {"lat": origin[0][0], "lng": origin[0][1]} if origin else None,
+                        "origin_trusted": bool(origin and origin[3]),
+                        "current": cur,
+                        "answer": ans,
+                        "coord": getattr(app, "_last_coord", "wgs84"),
+                        "round_move": app._round_move,
+                        "decoys": decoys,
+                        "candidates": cands,
+                        "mirrors": mirrors,
+                        "intercept": bool(app._proxy_set_by_us),
+                        "settings": ControlApiHandler._settings_snapshot(app),
+                    })
                     return
-                origin = app._round_anchor
-                with app._lock:
-                    cur = app._cur_pos
-                    ans = app._last_answer
-                    decoys = sum(1 for r in app._history if r.get("decoy"))
-                    cands = sum(1 for r in app._history if r.get("candidate"))
-                self._send(200, {
-                    "origin": {"lat": origin[0][0], "lng": origin[0][1]} if origin else None,
-                    "origin_trusted": bool(origin and origin[3]),
-                    "current": cur,
-                    "answer": ans,
-                    "round_move": app._round_move,
-                    "decoys": decoys,
-                    "candidates": cands,
-                    "settings": {
-                        "anti_decoy": app.config.get("anti_decoy", True),
-                        "near_m": app.config.get("near_m", 150),
-                        "display_delay": app.config.get("display_delay", 0.4),
-                        "api_poll": bool(app.config.get("api_poll")),
-                        "ai_auto": bool(app.config.get("ai_auto")),
-                    },
-                })
+                if path in ("/", "/index.html"):
+                    data = _read_web_asset("index.html")
+                    if data is not None:
+                        self._send_bytes(200, data, "text/html; charset=utf-8")
+                    else:
+                        self._send_bytes(404, "选择页资源缺失（web/index.html）".encode("utf-8"),
+                                         "text/plain; charset=utf-8")
+                    return
+                if path == "/tutorial.md":
+                    data = _read_web_asset("tutorial.md")
+                    if data is not None:
+                        self._send_bytes(200, data, "text/plain; charset=utf-8")
+                    else:
+                        self._send_bytes(404, "教程缺失".encode("utf-8"), "text/plain; charset=utf-8")
+                    return
+                self._send(404, {"error": "not found"})
 
             def do_POST(self):
+                if self.path == "/shutdown":
+                    self._send(200, {"status": "exiting"})
+                    logger.info("收到网页退出请求，正在还原系统代理并退出 ...")
+                    threading.Thread(target=_graceful_exit, args=(app,), daemon=True).start()
+                    return
                 if self.path != "/settings":
                     self._send(404, {"error": "not found"})
                     return
@@ -929,22 +1199,21 @@ class ControlApiHandler:
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
                     return
-                allowed = {"anti_decoy", "near_m", "display_delay", "api_poll", "ai_auto"}
+                allowed = {"anti_decoy", "near_m", "display_delay", "api_poll", "ai_auto",
+                           "oneclock_enabled", "oneclock_score", "oneclock_key", "map_size"}
                 for k, v in body.items():
                     if k in allowed:
                         app.config[k] = v
+                    elif k == "name_protect":  # 悬浮窗只提交开关，规则保持不动
+                        np = dict(app.config.get("name_protect") or {})
+                        np["enabled"] = bool(v)
+                        app.config["name_protect"] = np
                 save_config(app.config)
                 app.api_reader.enabled = bool(app.config.get("api_poll"))
                 if app.config.get("ai_auto"):
                     app.init_ai_backend()
                 logger.info("镜像悬浮窗更新设置: %s", applog.sanitize_json(body))
-                self._send(200, {"status": "ok", "settings": {
-                    "anti_decoy": app.config.get("anti_decoy", True),
-                    "near_m": app.config.get("near_m", 150),
-                    "display_delay": app.config.get("display_delay", 0.4),
-                    "api_poll": bool(app.config.get("api_poll")),
-                    "ai_auto": bool(app.config.get("ai_auto")),
-                }})
+                self._send(200, {"status": "ok", "settings": ControlApiHandler._settings_snapshot(app)})
 
             def log_message(self, *a):  # 静默访问日志
                 pass
@@ -952,12 +1221,19 @@ class ControlApiHandler:
         return Handler
 
     @staticmethod
-    def start(app: "TuxunApp", port: int) -> None:
+    def start(app: "TuxunApp", port: int, mirrors: dict) -> None:
+        if ControlApiHandler._started:
+            return
         from http.server import ThreadingHTTPServer
 
-        server = ThreadingHTTPServer(("127.0.0.1", port), ControlApiHandler.make_handler(app))
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), ControlApiHandler.make_handler(app, mirrors))
+        except OSError as exc:
+            logger.warning("控制端口 %d 绑定失败（可能已被本工具占用）: %s", port, exc)
+            return
+        ControlApiHandler._started = True
         threading.Thread(target=server.serve_forever, daemon=True, name="control-api").start()
-        logger.info("悬浮窗控制 API: http://127.0.0.1:%d/state", port)
+        logger.info("控制 API / 选择页: http://127.0.0.1:%d/", port)
 
 
 # ---------------------------------------------------------------------------
@@ -1167,6 +1443,7 @@ class TuxunApp:
         self._round_move = None     # 当前回合移动模式（True 可移动 / False 无移动 / None 未知）
         self._cur_pos = None        # {'lat','lng','from_origin_m','time'} 玩家目前位置
         self._last_answer = None    # {'lat','lng','time'} 最近一次揭示的答案
+        self._last_coord = "wgs84"  # 最近一次坐标的坐标系（gcj02/bd09 => 中国图，用于一键分数自动地图尺寸）
         self._mirror_cookie = ""    # 镜像会话的图寻 Cookie（会随服务端刷新）
         self._proxy_set_by_us = False
         self._saved_proxy: Tuple[bool, str] = (False, "")  # 开启拦截前的系统代理
@@ -1410,6 +1687,7 @@ class TuxunApp:
     def handle_point(self, lat: float, lng: float, coord: str = "wgs84",
                      source: str = "", pano: str = "", trusted: bool = False) -> None:
         key = (round(lat, 5), round(lng, 5))
+        self._last_coord = coord or "wgs84"
         if trusted:
             # 可信来源（API 直读）：直接作为本回合真值锚点，并校准之前的存疑候选
             with self._lock:
@@ -1874,11 +2152,15 @@ MIRROR_SPECS = {
 }
 
 
-def start_mirror_server(app: "TuxunApp", kind: str, port: int, control_port: int) -> None:
-    """平台镜像：反向代理 + 页面注入 + 悬浮窗控制 API（免证书、免系统代理）。"""
+def start_mirror_server(app: "TuxunApp", kind: str, port: int, control_port: int,
+                        mirrors: Optional[dict] = None) -> None:
+    """平台镜像：反向代理 + 页面注入 + 控制 API/选择页（免证书、免系统代理）。"""
     spec = MIRROR_SPECS[kind]
     jar = MirrorCookieJar(app, spec["env_key"], spec["session_file"])
-    ControlApiHandler.start(app, control_port)
+    if mirrors is None:
+        mirrors = {}
+    mirrors[kind] = port
+    ControlApiHandler.start(app, control_port, mirrors)
 
     def _run() -> None:
         async def _m() -> None:
@@ -1921,6 +2203,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="图寻助手 · 实时取点模式（本地代理拦截街景坐标）")
     parser.add_argument("--console", action="store_true", help="纯控制台模式，不启动图形界面")
+    parser.add_argument("--tui", action="store_true", help="TUI 后台仪表盘（端口/捕获状态/日志尾部），不启动图形界面")
     parser.add_argument("--port", type=int, help="本地代理端口（默认读取 config.json，初始 8080）")
     parser.add_argument("--proxy", action="store_true", help="启动后立即开启拦截并接管系统代理")
     parser.add_argument("--mirror", action="store_true",
@@ -1947,7 +2230,24 @@ def main() -> None:
     logger.info("========== 实时取点模式启动 ==========")
     logger.info("Python %s | %s | 日志文件: %s", sys.version.split()[0], sys.platform, log_file)
 
-    app = TuxunApp(config, console_only=args.console or not WEBVIEW_AVAILABLE)
+    cookies = {
+        "tuxun": os.getenv("TUXUN_COOKIE", "").strip(),
+        "geoguessr": os.getenv("GEOGUESSR_COOKIE", "").strip(),
+    }
+    mirror_on = bool(args.mirror or config.get("mirror_enabled"))
+
+    # ---- 互斥锁：端口占用检查（多开会冲突/互相写配置）----
+    wanted_ports = {int(config.get("proxy_port", 8080)): "本地代理",
+                    int(config.get("control_port", 18080)): "控制API/选择页"}
+    if mirror_on:
+        wanted_ports[int(config.get("mirror_port", 8001))] = "图寻镜像"
+        if cookies.get("geoguessr"):
+            wanted_ports[int(config.get("mirror_port_geo", 8002))] = "GeoGuessr 镜像"
+    if not ensure_ports_free(wanted_ports):
+        logger.info("因端口占用选择退出（互斥检查）。")
+        return
+
+    app = TuxunApp(config, console_only=args.console or args.tui or not WEBVIEW_AVAILABLE)
     if args.console and not WEBVIEW_AVAILABLE:
         print("[提示] 未安装 pywebview，已自动降级为控制台模式。")
     if config.get("ai_auto") and app.init_ai_backend():
@@ -1962,26 +2262,31 @@ def main() -> None:
     heal_stale_proxy(app.port)
 
     # 镜像模式：免证书免系统代理的本地直连入口（悬浮窗注入到页面）
-    cookies = {
-        "tuxun": os.getenv("TUXUN_COOKIE", "").strip(),
-        "geoguessr": os.getenv("GEOGUESSR_COOKIE", "").strip(),
-    }
-    mirror_on = bool(args.mirror or config.get("mirror_enabled"))
+    mirrors: dict = {}
+    # 控制 API + 选择页常驻（未开镜像也能打开主页看状态/教程/退出）
+    ControlApiHandler.start(app, int(config.get("control_port", 18080)), mirrors)
     if mirror_on:
-        cport = int(config.get("control_port", 18080))
         started = []
         for kind, pkey, default in (("tuxun", "mirror_port", 8001), ("geoguessr", "mirror_port_geo", 8002)):
             if kind == "geoguessr" and not cookies.get("geoguessr"):
                 logger.info("GeoGuessr 镜像跳过：未配置 GEOGUESSR_COOKIE。")
                 continue
             port_k = int(config.get(f"mirror_port_{kind}", default)) if kind == "geoguessr" else int(config.get("mirror_port", default))
-            start_mirror_server(app, kind, port_k, cport)
+            start_mirror_server(app, kind, port_k, int(config.get("control_port", 18080)), mirrors)
             if port_listening("127.0.0.1", port_k):
                 started.append(f"{kind}=http://127.0.0.1:{port_k}")
         if started:
-            logger.info("镜像已就绪: %s", " | ".join(started))
+            logger.info("镜像已就绪: %s | 选择页: http://127.0.0.1:%d/", " | ".join(started),
+                        int(config.get("control_port", 18080)))
         else:
             logger.warning("没有镜像端口启动成功。")
+
+    # 自动打开选择页（深色分屏入口）
+    if config.get("open_index", True):
+        try:
+            webbrowser.open(f"http://127.0.0.1:{int(config.get('control_port', 18080))}/")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("打开选择页失败: %s", exc)
 
     auto_proxy = False
     if not args.no_system_proxy and (args.proxy or config.get("proxy_enabled")):
@@ -2000,7 +2305,13 @@ def main() -> None:
         app.server.start(upstream)
         print(f"本地代理已启动: http://127.0.0.1:{app.port}，等待捕获街景坐标 ...\n")
 
-    if app.console_only:
+    if args.tui:
+        try:
+            import tuxun_tui
+            tuxun_tui.run_tui(app, mirrors, log_file)
+        except KeyboardInterrupt:
+            print("\n正在退出 ...")
+    elif app.console_only:
         try:
             while True:
                 if app.pending_cookie:

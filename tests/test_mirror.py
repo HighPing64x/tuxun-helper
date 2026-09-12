@@ -57,7 +57,11 @@ def make():
     cfg["log_history"] = False
     app = TuxunApp(cfg, console_only=True)
     inter = tuxun_proxy.TuxunInterceptor(app)
-    return app, MirrorRewrite(app, 8001, inter, 18080)
+    jar = tuxun_proxy.MirrorCookieJar(app, "TUXUN_COOKIE", "_mirror_session_tuxun.txt")
+    rw = MirrorRewrite(app, 8001, inter, 18080, jar,
+                       origin="https://tuxun.fun", origin_label="图寻",
+                       kind="tuxun", cdn_origin="https://b68res.daai.fun")
+    return app, rw
 
 
 def test_rewrite():
@@ -116,20 +120,56 @@ def test_json_rewrite():
 
 def test_control_api():
     app, rw = make()
-    ControlApiHandler.start(app, 18180)
+    ControlApiHandler._started = False          # 每个测试独立起服务
+    ControlApiHandler.start(app, 18180, {})
     time.sleep(0.3)
     import urllib.request as rq
+    http = rq.build_opener(rq.ProxyHandler({}))  # 绕过系统代理（Clash 等）
 
-    state = json.loads(rq.urlopen("http://127.0.0.1:18180/state", timeout=5).read())
+    state = json.loads(http.open("http://127.0.0.1:18180/state", timeout=5).read())
     assert state["origin"] is None and state["decoys"] == 0
+    assert "oneclock_enabled" in state["settings"], "state 缺少一键分数设置"
     req = rq.Request(
         "http://127.0.0.1:18180/settings",
-        data=json.dumps({"anti_decoy": False}).encode(),
+        data=json.dumps({"anti_decoy": False, "oneclock_score": 4200,
+                         "oneclock_key": "F7", "name_protect": True}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    j = json.loads(rq.urlopen(req, timeout=5).read())
+    j = json.loads(http.open(req, timeout=5).read())
     assert j["settings"]["anti_decoy"] is False and app.config["anti_decoy"] is False
-    print("4. 控制 API state/settings: 通过")
+    assert j["settings"]["oneclock_score"] == 4200
+    assert j["settings"]["oneclock_key"] == "F7"
+    assert j["settings"]["name_protect"] is True and app.config["name_protect"]["enabled"] is True
+    print("4. 控制 API state/settings（含一键分数/名称保护）: 通过")
+
+
+def test_index_and_tutorial():
+    app, rw = make()
+    ControlApiHandler._started = False
+    ControlApiHandler.start(app, 18181, {"tuxun": 8001})
+    time.sleep(0.3)
+    import urllib.request as rq
+    http = rq.build_opener(rq.ProxyHandler({}))  # 绕过系统代理（Clash 等）
+
+    idx = http.open("http://127.0.0.1:18181/", timeout=5).read().decode("utf-8")
+    assert "TUXUN HELPER" in idx and "side-tuxun" in idx, "选择页内容异常"
+    tut = http.open("http://127.0.0.1:18181/tutorial.md", timeout=5).read().decode("utf-8")
+    assert "一键特定分数" in tut, "教程缺少一键分数章节"
+    state = json.loads(http.open("http://127.0.0.1:18181/state", timeout=5).read())
+    assert state["mirrors"] == {"tuxun": 8001}, state["mirrors"]
+    print("6. 选择页 / + 教程 /tutorial.md + mirrors 端口状态: 通过")
+
+
+def test_overlay_v2():
+    app, rw = make()
+    page = "<html><body>x</body></html>"
+    f = FakeFlow("https://tuxun.fun/", page)
+    rw.response(f)
+    new = f.response._t
+    for key in ("tx-setpanel", "oneclock_enabled", "WebSocket.prototype.send",
+                '"scope":"tuxun"', "type: 'confirm'", "distForScore", "tx-ock"):
+        assert key in new, f"悬浮窗 v2 缺少 {key}"
+    print("7. 悬浮窗 v2：设置抽屉 + ws 钩子 + 一键分数: 通过")
 
 
 if __name__ == "__main__":
@@ -138,4 +178,6 @@ if __name__ == "__main__":
     test_json_rewrite()
     test_request_retarget()
     test_control_api()
+    test_index_and_tutorial()
+    test_overlay_v2()
     print("== 镜像模式单元测试全部通过 ==")
