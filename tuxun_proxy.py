@@ -334,6 +334,15 @@ class TuxunInterceptor:
     def __init__(self, app: "TuxunApp"):
         self.app = app
 
+    def request(self, flow: "http.HTTPFlow") -> None:
+        """竞猜/上报请求格式记录（用于兼容性分析）。"""
+        try:
+            u = flow.request.pretty_url
+            if "tuxun" in u and ("/game/report" in u or "/game/check" in u):
+                logger.info("上报请求: %s", u[:400])
+        except Exception:
+            pass
+
     @staticmethod
     def _platform(flow: "http.HTTPFlow") -> str:
         ref = (
@@ -704,7 +713,14 @@ class MirrorRewrite:
         self._ws_local = f"ws://127.0.0.1:{port}"
 
     def request(self, flow: "http.HTTPFlow") -> None:
-        """CDN 资产改道（/cdn/ 前缀 -> b68res.daai.fun）+ 上游会话注入。"""
+        # 竞猜/上报请求格式记录（用于兼容性分析；值不含敏感信息）
+        try:
+            u = flow.request.pretty_url
+            if "tuxun" in u and ("/game/report" in u or "/game/check" in u):
+                logger.info("上报请求: %s", u[:400])
+        except Exception:
+            pass
+        # CDN 资产改道（/cdn/ 前缀 -> b68res.daai.fun）+ 上游会话注入
         try:
             if flow.request.path.startswith("/cdn/"):
                 flow.request.path = flow.request.path[len("/cdn"):]
