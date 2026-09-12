@@ -43,3 +43,8 @@ TuxunSkill/
 
 # 临时分析产物
 _umi_bundle.js
+
+# 临时分析/补丁文件
+_*.py
+_*.html
+_*.js
