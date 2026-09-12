@@ -14,5 +14,6 @@
     "rules": []
   },
   "ai_auto": false,
-  "near_m": 150
+  "near_m": 150,
+  "mirror_port_geo": 8002
 }

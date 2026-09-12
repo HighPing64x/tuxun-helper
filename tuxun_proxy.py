@@ -45,6 +45,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
+from urllib.parse import urlsplit
 from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -692,42 +693,48 @@ class NameProtect:
 # ---------------------------------------------------------------------------
 
 class MirrorRewrite:
-    """反向代理响应改写：
-    * 绝对地址改写到本地镜像（JS 里转义斜杠的写法一并处理）；
+    """反向代理响应改写（按平台配置）：
+    * 上游站点的绝对地址改写到本地镜像（JS 里转义斜杠的写法一并处理）；
+    * 可选 CDN 改道（/cdn/ 前缀路由到静态资源站，仅图寻）；
     * Set-Cookie 去掉 Domain/Secure（镜像域为 127.0.0.1 + http）；
     * 页面注入悬浮窗（原点/目前/答案 + 设置），数据来自控制 API；
-    * 同时把流量委托给 TuxunInterceptor 做坐标捕获（反向模式下 host 仍是图寻）。
+    * tuxun 源同时把流量委托给 TuxunInterceptor 做坐标捕获；
+    * geoguessr 源解析对局 JSON，提取每回合真实坐标。
     """
 
-    _UP = "tuxun.fun"
-    _CDN = "https://b68res.daai.fun"
-
-    def __init__(self, app: "TuxunApp", port: int, interceptor: "TuxunInterceptor",
-                 control_port: int = 18080, jar: Optional[MirrorCookieJar] = None):
+    def __init__(self, app: "TuxunApp", local_port: int, interceptor: Optional["TuxunInterceptor"],
+                 control_port: int, jar: "MirrorCookieJar", *, origin: str, origin_label: str,
+                 kind: str, cdn_origin: str = ""):
         self.app = app
-        self.port = port
+        self.local_port = local_port
         self.interceptor = interceptor
-        self.jar = jar or MirrorCookieJar(app)
+        self.jar = jar
         self.control_port = control_port
-        self._local = f"http://127.0.0.1:{port}"
-        self._ws_local = f"ws://127.0.0.1:{port}"
+        self.origin = origin.rstrip("/")
+        self.origin_host = self.origin.split("//")[1]
+        self.origin_label = origin_label
+        self.kind = kind
+        self.cdn_origin = cdn_origin.rstrip("/")
+        self._local = f"http://127.0.0.1:{local_port}"
+        self._ws_local = f"ws://127.0.0.1:{local_port}"
 
     def request(self, flow: "http.HTTPFlow") -> None:
-        # 竞猜/上报请求格式记录（用于兼容性分析；值不含敏感信息）
+        # 竞猜/对局请求格式记录（兼容性分析；值不含敏感信息）
         try:
             u = flow.request.pretty_url
-            if "tuxun" in u and ("/game/report" in u or "/game/check" in u):
-                logger.info("上报请求: %s", u[:400])
+            if self.origin_host in u and ("/game/report" in u or "/game/check" in u or "/api/v3/games" in u):
+                logger.info("对局/上报请求: %s", u[:400])
         except Exception:
             pass
-        # CDN 资产改道（/cdn/ 前缀 -> b68res.daai.fun）+ 上游会话注入
+        # CDN 资产改道（/cdn/ 前缀 -> cdn_origin）+ 上游会话注入
         try:
-            if flow.request.path.startswith("/cdn/"):
+            if self.cdn_origin and flow.request.path.startswith("/cdn/"):
                 flow.request.path = flow.request.path[len("/cdn"):]
-                flow.request.host = "b68res.daai.fun"
-                flow.request.scheme = "https"
-                flow.request.port = 443
-            elif flow.request.pretty_host.endswith(self._UP) or "127.0.0.1" in flow.request.pretty_host:
+                u = urlsplit(self.cdn_origin)
+                flow.request.host = u.hostname
+                flow.request.scheme = u.scheme
+                flow.request.port = u.port or 443
+            elif "127.0.0.1" in flow.request.pretty_host:
                 ck = self.jar.load()
                 if ck:
                     flow.request.headers["cookie"] = ck
@@ -735,14 +742,13 @@ class MirrorRewrite:
             logger.debug("镜像请求改写失败: %s", exc)
 
     def _rewrite_text(self, text: str) -> str:
-        # 图寻前端把 API/静态资源地址硬编码在 JS 里（含 CDN），全部改写到本地镜像
-        text = text.replace(f"{self._CDN}", f"{self._local}/cdn")
-        text = text.replace(f"https://www.{self._UP}", self._local)
-        text = text.replace(f"https://{self._UP}", self._local)
-        text = text.replace(f"https:\\/\\/www.{self._UP}", self._local)
-        text = text.replace(f"https:\\/\\/{self._UP}", self._local)
-        text = text.replace(f"wss://{self._UP}", self._ws_local)
-        text = text.replace(f"wss:\\/\\/{self._UP}", self._ws_local)
+        # 平台前端把 API/静态资源地址硬编码在 JS/HTML 里，全部改写到本地镜像
+        text = text.replace(self.origin, self._local)
+        text = text.replace(self.origin.replace("/", "\\/"), self._local.replace("/", "\\/"))
+        text = text.replace(f"wss://{self.origin_host}", self._ws_local)
+        text = text.replace(f"wss:\/\/{self.origin_host}", self._ws_local)
+        if self.cdn_origin:
+            text = text.replace(self.cdn_origin, f"{self._local}/cdn")
         return text
 
     @staticmethod
@@ -761,7 +767,7 @@ class MirrorRewrite:
             v = _re.sub(r"Secure;?\s*", "", v, flags=_re.I)
             headers.append("set-cookie", v)
         joined = "; ".join(values)
-        if "fun_ticket=" in joined or "SESSION=" in joined:
+        if "fun_ticket=" in joined or "SESSION=" in joined or "session=" in joined:
             MirrorRewrite._cookie_store_update(joined)
 
     _cookie_store: dict = {}
@@ -771,8 +777,9 @@ class MirrorRewrite:
         MirrorRewrite._cookie_store["value"] = joined
 
     def response(self, flow: "http.HTTPFlow") -> None:
-        # 坐标/对局捕获与主拦截完全一致（反向模式下 host 仍为图寻域名）
-        self.interceptor.response(flow)
+        # 坐标/对局捕获与主拦截完全一致（反向模式下 host 仍为上游域名）
+        if self.kind == "tuxun" and self.interceptor is not None:
+            self.interceptor.response(flow)
         if flow.response is None:
             return
         try:
@@ -793,14 +800,15 @@ class MirrorRewrite:
         injected = False
         if "text/html" in ctype and "</body>" in new.lower():
             pos = new.lower().rfind("</body>")
-            injection = ("<script>" + _OVERLAY_SCRIPT.replace(
+            injection = "<script>" + _OVERLAY_SCRIPT.replace(
                 "__CONTROL_PORT__", str(self.app.config.get("control_port", 18080))
-            ) + "</script>")
+            ) + "</script>"
             new = new[:pos] + injection + new[pos:]
             injected = True
+        if self.kind == "geoguessr" and "/api/v3/games" in flow.request.pretty_url:
+            self._emit_geo_rounds(new)
         if new != text or injected:
             try:
-                # 放宽 CSP（页面内嵌 meta 与响应头），禁止缓存旧壳页
                 for h in ("content-security-policy", "content-security-policy-report-only"):
                     try:
                         del flow.response.headers[h]
@@ -812,19 +820,38 @@ class MirrorRewrite:
             except Exception as exc:
                 logger.debug("镜像改写失败: %s", exc)
 
+    def _emit_geo_rounds(self, body: str) -> None:
+        """GeoGuessr 对局 JSON：提取最新回合的答案坐标并上屏。"""
+        try:
+            data = json.loads(body)
+        except (ValueError, TypeError):
+            return
+        rounds = data.get("rounds") if isinstance(data, dict) else None
+        if not rounds:
+            return
+        rd = rounds[-1]
+        lat, lng = rd.get("lat"), rd.get("lng")
+        if lat is None or lng is None:
+            return
+        self.app.handle_point(
+            float(lat), float(lng), coord="wgs84",
+            source="GeoGuessr·API直读", pano=str(rd.get("panoId") or ""),
+            trusted=True,
+        )
+
     def websocket_message(self, flow: "http.HTTPFlow") -> None:
-        self.interceptor.websocket_message(flow)
-
-
+        if self.kind == "tuxun" and self.interceptor is not None:
+            self.interceptor.websocket_message(flow)
 class MirrorCookieJar:
-    """镜像会话的 Cookie 托管：优先使用 .env 的图寻 Cookie，并随服务器刷新。"""
+    """镜像会话的 Cookie 托管：优先使用 .env 中对应平台的 Cookie，并随服务器刷新。"""
 
-    def __init__(self, app: "TuxunApp"):
+    def __init__(self, app: "TuxunApp", env_key: str, session_file: str):
         self.app = app
-        self._file = os.path.join(BASE_DIR, "_mirror_session.txt")
+        self.env_key = env_key
+        self._file = os.path.join(BASE_DIR, session_file)
 
     def load(self) -> str:
-        stored = os.getenv("TUXUN_COOKIE", "").strip()
+        stored = os.getenv(self.env_key, "").strip()
         if os.path.exists(self._file):
             try:
                 with open(self._file, "r", encoding="utf-8") as f:
@@ -1837,17 +1864,31 @@ def install_signal_handlers(app: TuxunApp) -> None:
         app._ctrl_handler_ref = _handler_ref
 
 
-def start_mirror_server(app: "TuxunApp", port: int, control_port: int) -> None:
-    """图寻镜像：反向代理 + 页面注入 + 悬浮窗控制 API（免证书、免系统代理）。"""
+MIRROR_SPECS = {
+    "tuxun": {"origin": "https://tuxun.fun", "label": "图寻", "kind": "tuxun",
+              "env_key": "TUXUN_COOKIE", "session_file": "_mirror_session_tuxun.txt",
+              "cdn_origin": "https://b68res.daai.fun", "port_key": "mirror_port"},
+    "geoguessr": {"origin": "https://www.geoguessr.com", "label": "GeoGuessr", "kind": "geoguessr",
+                  "env_key": "GEOGUESSR_COOKIE", "session_file": "_mirror_session_geo.txt",
+                  "cdn_origin": "", "port_key": "mirror_port_geo"},
+}
+
+
+def start_mirror_server(app: "TuxunApp", kind: str, port: int, control_port: int) -> None:
+    """平台镜像：反向代理 + 页面注入 + 悬浮窗控制 API（免证书、免系统代理）。"""
+    spec = MIRROR_SPECS[kind]
+    jar = MirrorCookieJar(app, spec["env_key"], spec["session_file"])
     ControlApiHandler.start(app, control_port)
-    jar = MirrorCookieJar(app)
 
     def _run() -> None:
         async def _m() -> None:
-            opts = Options(mode=[f"reverse:https://tuxun.fun@127.0.0.1:{port}"])
+            opts = Options(mode=[f"reverse:{spec['origin']}@127.0.0.1:{port}"])
             master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-            interceptor = TuxunInterceptor(app)
-            master.addons.add(MirrorRewrite(app, port, interceptor, control_port, jar))
+            interceptor = TuxunInterceptor(app) if kind == "tuxun" else None
+            rewrite = MirrorRewrite(app, port, interceptor, control_port, jar,
+                                    origin=spec["origin"], origin_label=spec["label"],
+                                    kind=kind, cdn_origin=spec.get("cdn_origin", ""))
+            master.addons.add(rewrite)
             await master.run()
 
         loop = asyncio.new_event_loop()
@@ -1862,8 +1903,8 @@ def start_mirror_server(app: "TuxunApp", port: int, control_port: int) -> None:
             except Exception:
                 pass
 
-    threading.Thread(target=_run, daemon=True, name="mirror").start()
-    deadline = time.time() + 10
+    threading.Thread(target=_run, daemon=True, name=f"mirror-{kind}").start()
+    deadline = time.time() + 12
     while time.time() < deadline:
         if port_listening("127.0.0.1", port, timeout=0.4):
             return
@@ -1921,13 +1962,26 @@ def main() -> None:
     heal_stale_proxy(app.port)
 
     # 镜像模式：免证书免系统代理的本地直连入口（悬浮窗注入到页面）
+    cookies = {
+        "tuxun": os.getenv("TUXUN_COOKIE", "").strip(),
+        "geoguessr": os.getenv("GEOGUESSR_COOKIE", "").strip(),
+    }
     mirror_on = bool(args.mirror or config.get("mirror_enabled"))
     if mirror_on:
-        mport = int(config.get("mirror_port", 8001))
         cport = int(config.get("control_port", 18080))
-        start_mirror_server(app, mport, cport)
-        if port_listening("127.0.0.1", mport):
-            logger.info("图寻镜像已就绪: http://127.0.0.1:%d（悬浮窗 API: %d）", mport, cport)
+        started = []
+        for kind, pkey, default in (("tuxun", "mirror_port", 8001), ("geoguessr", "mirror_port_geo", 8002)):
+            if kind == "geoguessr" and not cookies.get("geoguessr"):
+                logger.info("GeoGuessr 镜像跳过：未配置 GEOGUESSR_COOKIE。")
+                continue
+            port_k = int(config.get(f"mirror_port_{kind}", default)) if kind == "geoguessr" else int(config.get("mirror_port", default))
+            start_mirror_server(app, kind, port_k, cport)
+            if port_listening("127.0.0.1", port_k):
+                started.append(f"{kind}=http://127.0.0.1:{port_k}")
+        if started:
+            logger.info("镜像已就绪: %s", " | ".join(started))
+        else:
+            logger.warning("没有镜像端口启动成功。")
 
     auto_proxy = False
     if not args.no_system_proxy and (args.proxy or config.get("proxy_enabled")):
