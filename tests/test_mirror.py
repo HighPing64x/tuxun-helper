@@ -226,25 +226,33 @@ def test_tiles_and_login_route():
         raise AssertionError("垃圾路径应 404")
     except rq.HTTPError as e:
         assert e.code == 404, e.code
-    # 登录触发端点（控制台无窗口，应返回可读提示而非崩溃）
+    # 登录端点（2.0 网页登录）：返回镜像登录页 URL
     req = rq.Request("http://127.0.0.1:18182/login/tuxun", data=b"", method="POST")
     j = json.loads(http.open(req, timeout=8).read())
-    assert j["status"] in ("error", "info", "success") and j.get("message"), j
-    print("8. OSM 瓦片路由校验 + /login 端点: 通过")
+    assert j["status"] == "success" and j["url"] == "http://127.0.0.1:8001/", j
+    print("8. OSM 瓦片路由校验 + /login 网页登录端点: 通过")
 
 
-def test_login_cookie_header():
-    import http.cookiejar as cj
-    c1 = cj.Cookie(0, "fun_ticket", "abc", None, False, "tuxun.fun", True, False,
-                   "/", False, False, None, False, None, None, {})
-    c2 = cj.Cookie(0, "session", "xyz", None, False, ".geoguessr.com", True, False,
-                   "/", False, False, None, False, None, None, {})
-    assert tuxun_proxy._cookies_header_for([c1, c2], "tuxun") == "fun_ticket=abc"
-    assert tuxun_proxy._cookies_header_for([c1, c2], "geoguessr") == "session=xyz"
-    c3 = cj.Cookie(0, "__cf_bm", "zzz", None, False, ".geoguessr.com", True, False,
-                   "/", False, False, None, False, None, None, {})
-    assert tuxun_proxy._cookies_header_for([c3], "geoguessr") == "", "无 session 应返回空"
-    print("9. 登录 Cookie 提取与判定: 通过")
+def test_settings_endpoints():
+    """GET /settings 快照 + POST 白名单（2.0 网页设置页的后端）。"""
+    app, rw = make()
+    ControlApiHandler._started = False
+    ControlApiHandler.start(app, 18183, {})
+    time.sleep(0.3)
+    import urllib.request as rq
+    http = rq.build_opener(rq.ProxyHandler({}))
+
+    s = json.loads(http.open("http://127.0.0.1:18183/settings", timeout=5).read())["settings"]
+    for key in ("anti_decoy", "oneclock_key", "map_tiles", "mirror_enabled", "version", "intercept"):
+        assert key in s, f"settings 缺少 {key}"
+    pts = json.loads(http.open("http://127.0.0.1:18183/points", timeout=5).read())
+    assert "points" in pts
+    req = rq.Request("http://127.0.0.1:18183/settings",
+                     data=json.dumps({"map_tiles": "amap", "oneclock_score": 4000}).encode(),
+                     headers={"Content-Type": "application/json"})
+    j = json.loads(http.open(req, timeout=5).read())
+    assert j["settings"]["map_tiles"] == "amap" and j["settings"]["oneclock_score"] == 4000
+    print("9. 网页设置端点（GET/POST /settings + /points）: 通过")
 
 
 if __name__ == "__main__":
@@ -256,7 +264,7 @@ if __name__ == "__main__":
     test_index_and_tutorial()
     test_overlay_v2()
     test_tiles_and_login_route()
-    test_login_cookie_header()
+    test_settings_endpoints()
     test_mirror_login_capture()
     test_location_rewrite()
     print("== 镜像模式单元测试全部通过 ==")

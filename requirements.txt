@@ -5,9 +5,8 @@ python-dotenv>=1.0.0
 google-genai>=1.0.0        # Google Gemini 官方 SDK（用国内直连模型可不装）
 pillow>=10.0.0             # 仅 --grid 拼图模式需要
 
-# 实时取点模式
+# 实时取点模式（2.0 全网页版：无 GUI 依赖）
 mitmproxy>=10.0.0
-pywebview>=5.0,<6.0        # 6.x 在 Windows 上有 .NET 属性枚举 bug（启动刷屏报错）
 rich>=13.0.0               # 仅 --tui 后台仪表盘需要（未装会自动降级为纯文本输出）
 
 # 如需使用 socks5 代理（PROXY_URL=socks5h://...），额外安装：

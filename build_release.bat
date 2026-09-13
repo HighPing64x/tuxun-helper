@@ -1,10 +1,11 @@
 @echo off
 REM ============================================================
-REM  图寻助手 - 单文件 Release 构建脚本
+REM  图寻助手 v2.0 - 单文件 Release 构建脚本
 REM  产物在 dist\ 目录：
-REM    TuxunHelper-Realtime.exe  实时取点（选择页 + 双镜像 + TUI 后台 + 悬浮窗）
+REM    TuxunHelper-Realtime.exe  后台服务（网页前端 + 双镜像 + TUI + 悬浮窗）
 REM    TuxunHelper-AI.exe        AI 分析 / 复盘 / 抽奖（命令行）
-REM  web\ 目录（index.html 选择页 + tutorial.md 教程）会一并打包进 exe
+REM  2.0 起为全网页版：无 pywebview / 无原生窗口，web\ 目录
+REM  （index.html 前端 + vendor Leaflet + tutorial.md 教程）打包进 exe
 REM  首次运行会自动创建 .build-venv 构建环境
 REM ============================================================
 setlocal
@@ -14,26 +15,18 @@ if not exist .build-venv\Scripts\python.exe (
     echo [构建] 首次运行，创建构建环境（约 2-5 分钟）...
     python -m venv .build-venv
     .build-venv\Scripts\python -m pip install -q -U pip -i https://pypi.tuna.tsinghua.edu.cn/simple
-    .build-venv\Scripts\pip install -q requests python-dotenv pillow "mitmproxy>=10" "pywebview>=5.4,<6" "bcrypt==4.0.1" "rich>=13" pyinstaller websocket-client -i https://pypi.tuna.tsinghua.edu.cn/simple
+    .build-venv\Scripts\pip install -q requests python-dotenv pillow "mitmproxy>=10" "bcrypt==4.0.1" "rich>=13" pyinstaller websocket-client -i https://pypi.tuna.tsinghua.edu.cn/simple
 )
 
-set PIPINF=--no-warn-script-location
-
-echo [构建] 实时取点 TuxunHelper-Realtime.exe ...
+echo [构建] 后台服务 TuxunHelper-Realtime.exe ...
 .build-venv\Scripts\pyinstaller --noconfirm --onefile --console --clean ^
   --name TuxunHelper-Realtime ^
-  --add-data "gui.html;." ^
   --add-data "web;web" ^
   --collect-all mitmproxy ^
   --collect-submodules mitmproxy ^
   --collect-all mitmproxy_rs ^
   --collect-data kaitaistruct ^
   --collect-data publicsuffix2 ^
-  --collect-submodules webview ^
-  --hidden-import webview.platforms.winforms ^
-  --hidden-import webview.platforms.edgechromium ^
-  --collect-all clr_loader ^
-  --collect-all pythonnet ^
   tuxun_proxy.py || goto :err
 
 echo [构建] AI 分析 TuxunHelper-AI.exe ...

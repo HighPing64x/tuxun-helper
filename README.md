@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🌍 图寻助手 (Tuxun Helper)
+# 🌍 图寻助手 (Tuxun Helper) v2.0 · 全网页版
 
 **AI 驱动的图寻 / GeoGuessr 双平台游戏辅助工具 —— 支持国内网络环境直连使用**
 
@@ -52,10 +52,8 @@
 - **防诱饵（距离 + 移动模式双判定）**：距离变化 ≤150 米 = 同一地点确认正确；无移动回合的远距坐标 = 诱饵排除；可移动回合的远距坐标 = 玩家合法移动（静默）；真值未知时判候选二选一，API 到位自动校准
 - **Clash 开关自适应**：开启拦截时自动检测已有系统代理并级联转发（浏览器 → 本工具 → Clash → 互联网），被墙流量照常出得去；关闭/退出时**原样还原**你的代理设置
 - **三重防护不断网**：看门狗（代理守卫改写自动夺回、代理线程退出立即还原）+ 启动自愈（清理崩溃残留）+ 全退出路径信号处理
-- **双模式登录（免手动抓 Cookie）**：
-  - **网页登录（推荐）**：全浏览器流程——本地镜像页内直接登录（图寻微信扫码为页面内轮询机制，无 OAuth 白名单问题），登录 Set-Cookie 经镜像捕获**自动写入 .env**（图寻认 `fun_ticket` / Geo 认 `session`），登录回调 `Location` 与 URL 编码参数一并改写，全程不离开浏览器、不弹任何窗口
-  - **弹窗登录（单窗口+官网）**：`--login tuxun|geoguessr` 或 GUI「登录图寻/登录Geo」/ 选择页「弹窗登录」——独立窗口打开官网，后台轮询 Cookie；**官网白屏时窗口内自动提供「改用镜像加载」按钮**，两路捕获殊途同归
-- **双镜像常开**：图寻(8001) 与 GeoGuessr(8002) 镜像**未登录也启动**——登录就发生在镜像页里；选择页状态栏实时显示两平台登录态
+- **网页登录（免手动抓 Cookie）**：登录发生在本地镜像页里（图寻微信扫码为页面内轮询机制，无 OAuth 白名单问题），登录 Set-Cookie 经镜像捕获**自动写入 .env**（图寻认 `fun_ticket` / Geo 认 `session`），登录回调 `Location` 与 URL 编码参数一并改写；网页「登录」页、`--login tuxun|geoguessr`、选择页点击未登录平台三种入口殊途同归
+- **双镜像常开**：图寻(8001) 与 GeoGuessr(8002) 镜像**未登录也启动**（镜像默认开启）——登录就发生在镜像页里；网页实时显示两平台登录态
 - **Cookie 自动录入（被动）**：镜像/拦截检测到平台 Cookie 弹窗询问「是否自动录入？」，同意后写入 `.env` 即时生效，拒绝则不再询问
 - **双图源拦截**：Google 街景（`GetMetadata`）+ 图寻国内图源（`get(QQ)PanoInfo`）
 - **稳健解析**：已知响应结构优先 + 递归扫描兜底，平台改版也不怕
@@ -63,7 +61,7 @@
 - **坐标系处理**：WGS84 与 GCJ-02（火星坐标）/ BD09（百度坐标）自动互转，国内地图落点精准
 - **地址反查**：国内坐标走高德逆地理编码（内置默认 Key），全球坐标走 Nominatim → BigDataCloud 自动回退
 - **一键操作**：复制原点/目前坐标、跳转 OSM / Google Maps / 高德，历史落点列表点击回看
-- **纯控制台模式**：`--console` 无 GUI 可用，`--proxy` 启动即接管系统代理
+- **全网页版架构（2.0）**：本地只有 后台 CLI + 网页前端，无任何原生窗口；仪表盘 / 实时地图 / 全部设置 / 登录 / 教程都在网页完成，`--tui` 可切换 Rich 终端仪表盘，`--proxy` 启动即接管系统代理
 
 ### 🤖 AI 分析模式
 
@@ -101,7 +99,7 @@ cd tuxun-helper
 python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-> 实时取点模式需要 `mitmproxy` 与 `pywebview`（已在 requirements.txt 中），AI 模式二者皆不需要。
+> 实时取点模式需要 `mitmproxy`（已在 requirements.txt 中）；2.0 起为全网页版，不再依赖 pywebview。AI 模式二者皆不需要。
 
 ### 2. 配置 AI 后端（AI 模式必需，二选一）
 
@@ -159,11 +157,11 @@ TUXUN_COOKIE=fun_ticket=eyJf...
 # 弹窗登录（单窗口+官网）：
 python tuxun_proxy.py --login tuxun        # 打开图寻官网登录（微信扫码），Cookie 自动写入 .env
 python tuxun_proxy.py --login geoguessr    # 同理，GeoGuessr（官网白屏时窗口内提供镜像加载回退）
-# GUI 模式也可直接点「登录图寻」/「登录Geo」按钮；选择页点击未登录平台会给出两种模式的选择
+# 网页「登录」页、选择页点击未登录平台同样直达镜像登录；登录全程在浏览器内完成
 
 # ===== 实时取点 =====
 python tuxun_proxy.py --install-cert   # 首次一次：安装证书（装过跳过）
-python tuxun_proxy.py                  # 图形界面 → 点「开启拦截」→ 浏览器正常做题
+python tuxun_proxy.py                  # 后台服务 + 自动打开网页控制台（镜像默认开启）
 python tuxun_proxy.py --proxy --console  # 纯控制台 + 启动即接管系统代理
 
 # ===== 镜像模式（免证书、免系统代理，双平台）=====
@@ -202,7 +200,7 @@ python main.py --draw
 
    > 程序首次运行会自动在 `~\.mitmproxy\` 生成根证书；也可双击该证书手动导入「受信任的根证书颁发机构」。装完**重启浏览器**。
 
-2. **启动程序**：`python tuxun_proxy.py`，点击 **「开启拦截」**
+2. **启动程序**：`python tuxun_proxy.py`（后台 CLI），拦截可在网页「设置」页开关，或加 `--proxy` 启动即接管
 
 3. **正常游戏**：浏览器打开 tuxun.fun 或 geoguessr.com 做题——进入街景的瞬间坐标自动落图；积分赛/每日挑战的倒计时结束时答案自动揭示；移动模式回合金色「原点」+ 绿色「目前」双标记
 
@@ -248,10 +246,10 @@ python main.py --draw
 | `map_zoom` | 地图初始缩放 | `5` |
 | `amap_key` | 高德 Web 服务 Key（已内置默认 Key，开箱即用） | 内置 |
 | `upstream_proxy` | 上级代理。**留空 = 自动跟随系统已有代理（Clash 自适应）** | 空（自动） |
-| `api_poll` | API 直读：被动读取浏览器自身的 `solo/get` 响应获取真实坐标（绕过诱饵）。**默认关，GUI「API直读」开关** | `false` |
+| `api_poll` | API 直读：被动读取浏览器自身的 `solo/get` 响应获取真实坐标（绕过诱饵）。**默认关，网页「设置」页可调** | `false` |
 | `cookie_declined` | Cookie 自动录入询问中点过「否」的平台记忆 | 空 |
 | `ai_auto` | AI 自动分析：新回合自动抓图分析并对答案（需 .env 配 AI Key） | `false` |
-| `mirror_enabled` | 启动时自动开启镜像（也可用 `--mirror` 临时开启） | `false` |
+| `mirror_enabled` | 启动时自动开启镜像（2.0 起默认开，`--no-mirror` 临时关闭；老配置首次运行自动迁移为开） | `true` |
 | `mirror_port` | 图寻镜像端口（浏览器访问 `http://127.0.0.1:该端口` 做题） | `8001` |
 | `mirror_port_geo` | GeoGuessr 镜像端口 | `8002` |
 | `control_port` | 控制端口：选择页主页 + 悬浮窗状态/设置 API（仅本机监听） | `18080` |
@@ -324,11 +322,11 @@ Nominatim 是免费公共服务且限速 1 次/秒（已内置限速与缓存）
 
 | 产物 | 说明 |
 |---|---|
-| `TuxunHelper-Realtime.exe`（约 38 MB） | 实时取点全套：选择页（深色分屏入口）+ 双平台镜像 + TUI 后台 + 悬浮窗（设置抽屉 / 一键特定分数）+ 诱饵免疫 + Cookie 自动录入 + 答案揭示 |
+| `TuxunHelper-Realtime.exe` | 后台服务全套：网页前端（选择页/仪表盘/地图/设置/登录/教程）+ 双平台镜像（默认开启）+ TUI 后台 + 悬浮窗（设置抽屉 / 一键特定分数）+ 诱饵免疫 + 网页登录自动录 Cookie + 答案揭示 |
 | `TuxunHelper-AI.exe`（约 21 MB） | AI 分析 / 复盘 / 历史 / 会员抽奖（命令行） |
 
 说明：
-- **exe 已内置网页版使用教程**：控制台/选择页访问 `http://127.0.0.1:18080/tutorial.md`，或运行 `TuxunHelper-Realtime.exe --tui` 查看后台仪表盘；教程面向 exe 使用者，与 GitHub README 相互独立；
+- **exe 已内置网页**：教程在网页「教程」页或 `http://127.0.0.1:18080/tutorial.md`；`--tui` 为 Rich 终端仪表盘；教程面向 exe 使用者，与 GitHub README 相互独立；
 - exe 的配置、Cookie、日志自动生成在 **exe 同目录**；
 - 使用 `--skill` 时，把 `TuxunSkill/` 文件夹放到 exe 旁边即可；
 - exe 版内置国内直连模型支持；**Gemini 需使用 Python 源码版运行**（体积考量未内置 Gemini SDK）；
@@ -347,7 +345,7 @@ tuxun-helper/
 ├── applog.py         # 统一日志（滚动文件 + 自动脱敏）
 ├── tuxun_proxy.py    # 实时取点模式入口（本地代理 / 诱饵判定 / Cookie 自动录入 / 双镜像 / 一键分数）
 ├── tuxun_tui.py      # TUI 后台仪表盘（--tui，端口/捕获状态/日志尾部）
-├── gui.html          # 实时取点模式界面（Leaflet 地图 / 原点目前双坐标）
+├── web/              # 网页前端（选择页/仪表盘/地图/设置/登录/教程 + Leaflet 本地打包）
 ├── web/              # 选择页 index.html + exe 内置教程 tutorial.md（打包进 Realtime exe）
 ├── build_release.bat # 单文件 exe 构建脚本（见「单文件打包」）
 ├── docs/

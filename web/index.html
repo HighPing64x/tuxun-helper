@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>图寻助手 · 选择平台</title>
+<title>图寻助手 · Tuxun Helper</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/vendor/leaflet.css">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #060608; }
@@ -11,28 +12,38 @@
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     color: #e8e8f0; cursor: default;
     background: radial-gradient(ellipse at 50% 60%, #12121c 0%, #060608 70%);
-    transition: background 0.6s ease;
   }
-  body.side-hover-left  { background: radial-gradient(ellipse at 28% 60%, #1a1420 0%, #060608 70%); }
-  body.side-hover-right { background: radial-gradient(ellipse at 72% 60%, #101a24 0%, #060608 70%); }
 
-  /* ---- 中央射线（贯穿全屏的双向细线）---- */
+  /* ================= 品牌条 ================= */
+  #brand {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 60; height: 44px;
+    display: flex; align-items: center; gap: 12px; padding: 0 18px;
+    background: linear-gradient(180deg, rgba(6,6,8,.9), rgba(6,6,8,0));
+    pointer-events: none;
+  }
+  #brand .logo { font-size: 14px; letter-spacing: 4px; color: #8a8aa8; pointer-events: auto; cursor: pointer; }
+  #brand .logo b { color: #fff; font-weight: 500; }
+  #brand .ver { font-size: 10px; color: #4a4a60; }
+  #conn { width: 8px; height: 8px; border-radius: 50%; background: #d97a7a; box-shadow: 0 0 8px #d97a7a; }
+  #conn.ok { background: #69db7c; box-shadow: 0 0 8px #69db7c; }
+  #brand .spacer { flex: 1; }
+
+  /* ================= 主页选择页 ================= */
+  .home-only { transition: opacity .45s ease, filter .45s ease; }
+  body.viewing .home-only { opacity: 0; pointer-events: none; filter: blur(6px); }
   #ray-v {
     position: fixed; left: 50%; top: 0; width: 1px; height: 100%;
     background: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.75) 30%,
                 rgba(255,255,255,.9) 50%, rgba(255,255,255,.75) 70%, transparent 100%);
     transform: translateX(-50%); pointer-events: none; z-index: 5;
-    transition: opacity .5s ease, width .4s ease;
+    transition: opacity .5s ease;
   }
   #ray-h {
     position: fixed; top: 50%; left: 0; height: 1px; width: 100%;
     background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.28) 50%, transparent 100%);
-    transform: translateY(-50%); pointer-events: none; z-index: 5;
-    transition: opacity .5s ease;
+    transform: translateY(-50%); pointer-events: none; z-index: 5; transition: opacity .5s ease;
   }
-  body.ring-open #ray-v, body.ring-open #ray-h { opacity: .18; }
-
-  /* ---- 白点 ---- */
+  body.viewing #ray-v, body.viewing #ray-h { opacity: 0; }
   #dot {
     position: fixed; left: 50%; top: 50%; z-index: 20;
     width: 14px; height: 14px; border-radius: 50%;
@@ -41,13 +52,12 @@
     cursor: pointer; transition: box-shadow .35s ease;
   }
   #dot:hover { box-shadow: 0 0 30px 8px rgba(255,255,255,.75); }
-
-  /* ---- 悬停侧：内容放大 + 光晕 ---- */
   .side {
     position: fixed; top: 0; height: 100%; width: 50%;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    z-index: 10; cursor: pointer; transition: transform .55s cubic-bezier(.22,.9,.3,1), opacity .45s ease, filter .45s ease;
-    opacity: .5; filter: saturate(.4) brightness(.8);
+    z-index: 10; cursor: pointer;
+    transition: transform .55s cubic-bezier(.22,.9,.3,1), opacity .45s ease, filter .45s ease;
+    opacity: .55; filter: saturate(.5) brightness(.85);
   }
   .side.left  { left: 0; }
   .side.right { right: 0; }
@@ -59,13 +69,11 @@
   .side:hover .icon { transform: scale(1.12); }
   .side:hover .name { opacity: 1; text-shadow: 0 0 24px rgba(255,255,255,.35); }
   .side:hover .underline { width: 110px; background: #fff; }
-  .side.left:hover  .icon  { filter: drop-shadow(0 0 14px rgba(255,120,80,.55)); }
+  .side.left:hover  .icon { filter: drop-shadow(0 0 14px rgba(255,120,80,.55)); }
   .side.left:hover  .underline { background: #ff7850; }
-  .side.right:hover .icon  { filter: drop-shadow(0 0 14px rgba(90,190,255,.55)); }
+  .side.right:hover .icon { filter: drop-shadow(0 0 14px rgba(90,190,255,.55)); }
   .side.right:hover .underline { background: #5ab8ff; }
   body.side-hover-left  .side.right, body.side-hover-right .side.left { opacity: .38; filter: saturate(.45) brightness(.72); transform: scale(.97); }
-
-  /* ---- 白点展开的圆环（悬停白点）---- */
   #ring {
     position: fixed; left: 50%; top: 50%; z-index: 30;
     width: 0; height: 0; border-radius: 50%;
@@ -76,10 +84,7 @@
                 opacity .35s ease, transform .45s cubic-bezier(.22,.9,.3,1);
     pointer-events: none;
   }
-  body.ring-open #ring {
-    width: 30vmin; height: 30vmin; opacity: 1;
-    transform: translate(-50%,-50%) scale(1); pointer-events: auto;
-  }
+  body.ring-open #ring { width: 30vmin; height: 30vmin; opacity: 1; transform: translate(-50%,-50%) scale(1); pointer-events: auto; }
   .ring-item {
     position: absolute; background: rgba(16,16,24,.94); border: 1px solid rgba(255,255,255,.22);
     border-radius: 6px; padding: 10px 16px; text-align: center; cursor: pointer;
@@ -90,88 +95,135 @@
   .ring-item .ri-title { font-size: 13px; color: #fff; margin-bottom: 2px; }
   .ring-item .ri-sub { font-size: 10px; color: #7a7a90; }
   body.ring-open .ring-item { opacity: 1; transform: scale(1); }
-  /* 三分区位置：上 / 左下 / 右下 */
-  .ring-item.top    { left: 50%; top: -58px; transform: translate(-50%,-100%) scale(.7); }
-  body.ring-open .ring-item.top    { transform: translate(-50%,-100%) scale(1); }
-  .ring-item.bl     { left: -30px; bottom: -14px; }
-  .ring-item.br     { right: -30px; bottom: -14px; }
+  .ring-item.top { left: 50%; top: -58px; transform: translate(-50%,-100%) scale(.7); }
+  body.ring-open .ring-item.top { transform: translate(-50%,-100%) scale(1); }
+  .ring-item.bl { left: -30px; bottom: -14px; }
+  .ring-item.br { right: -30px; bottom: -14px; }
 
-  /* ---- 状态条 ---- */
-  #status {
-    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 40;
-    font-size: 11px; color: #55556a; letter-spacing: 1px;
+  /* ================= 底部 Dock ================= */
+  #dock {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 70;
+    display: flex; gap: 4px; padding: 6px;
+    background: rgba(16,16,26,.88); border: 1px solid #262e48; border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.5); backdrop-filter: blur(10px);
   }
-  #status b { color: #8a8aa8; font-weight: normal; }
+  #dock .dk {
+    border: none; background: none; color: #7a7a94; cursor: pointer;
+    font-size: 12px; padding: 8px 14px; border-radius: 9px; letter-spacing: 2px;
+    transition: background .2s, color .2s; font-family: inherit;
+  }
+  #dock .dk:hover { background: #20203a; color: #cfd6ff; }
+  #dock .dk.on { background: #262650; color: #fff; }
 
-  /* ---- 标题 ---- */
-  #title {
-    position: fixed; top: 34px; left: 50%; transform: translateX(-50%); z-index: 40;
-    font-size: 15px; letter-spacing: 8px; color: #8a8aa8; font-weight: 300;
+  /* ================= 内容视图 ================= */
+  #view {
+    position: fixed; inset: 44px 0 0 0; z-index: 40; display: none;
+    padding: 18px 22px 90px; overflow-y: auto;
   }
-  a { color: inherit; text-decoration: none; }
+  body.viewing #view { display: block; }
+  #view .wrap { max-width: 1060px; margin: 0 auto; }
+  #view h2 { font-size: 18px; font-weight: 500; letter-spacing: 3px; color: #fff; margin: 10px 0 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .card {
+    background: #10101a; border: 1px solid #232a44; border-radius: 12px; padding: 14px 16px;
+  }
+  .card .k { font-size: 11px; color: #6a6a84; letter-spacing: 2px; margin-bottom: 6px; }
+  .card .v { font-size: 15px; color: #e8e8f0; font-family: Consolas, monospace; word-break: break-all; }
+  .card .v.gold { color: #FFD700; } .card .v.green { color: #69db7c; }
+  .card .v.blue { color: #4FC3F7; } .card .v.red { color: #d97a7a; } .card .v.orange { color: #f0a35e; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; border: 1px solid #2a3350; color: #9aa; }
+  .badge.ok { color: #69db7c; border-color: #2e5c3a; }
+  .badge.no { color: #d97a7a; border-color: #5c2e2e; }
+  table.pts { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.pts th { text-align: left; color: #6a6a84; font-weight: normal; padding: 6px 8px; border-bottom: 1px solid #232a44; }
+  table.pts td { padding: 6px 8px; border-bottom: 1px solid #191f33; color: #cfd6e8; font-family: Consolas, monospace; }
+  table.pts tr:hover td { background: #14182a; cursor: pointer; }
+  .kind { font-size: 11px; padding: 1px 8px; border-radius: 10px; }
+  .kind.main { color: #FFD700; background: #2a2410; }
+  .kind.decoy { color: #d97a7a; background: #2a1414; }
+  .kind.candidate { color: #f0a35e; background: #2a2010; }
+  .kind.moved { color: #69db7c; background: #142a18; }
+  .kind.answer { color: #4FC3F7; background: #12222e; }
 
-  /* ---- 登录方式选择对话框 ---- */
-  #login-mask {
-    position: fixed; inset: 0; z-index: 50; display: none;
-    background: rgba(0,0,0,.55); backdrop-filter: blur(4px);
+  /* 设置表单 */
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px 18px; }
+  .form-grid label.f { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    background: #10101a; border: 1px solid #232a44; border-radius: 10px; padding: 10px 14px; font-size: 13px; }
+  .form-grid .hint { font-size: 10px; color: #5a5a70; margin-top: 3px; }
+  input[type=number], input[type=text], select {
+    background: #0b0e18; color: #cfe3ff; border: 1px solid #2a3350; border-radius: 6px;
+    padding: 5px 8px; font-size: 13px; width: 130px; font-family: inherit;
   }
-  #login-mask.show { display: flex; align-items: center; justify-content: center; }
-  #login-box {
-    width: 380px; max-width: 90vw; background: #12121c; border: 1px solid #2a3350;
-    border-radius: 12px; padding: 22px 24px; box-shadow: 0 12px 48px rgba(0,0,0,.6);
-    animation: pop .25s cubic-bezier(.22,.9,.3,1);
+  input[type=checkbox] { width: 16px; height: 16px; accent-color: #5a7aff; }
+  button.act {
+    background: #262650; color: #fff; border: 1px solid #3a3a7a; border-radius: 8px;
+    padding: 8px 20px; cursor: pointer; font-size: 13px; letter-spacing: 2px; font-family: inherit;
   }
-  @keyframes pop { from { transform: scale(.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-  #login-box h3 { font-size: 16px; color: #fff; font-weight: 500; margin-bottom: 6px; }
-  #login-box p { font-size: 12px; color: #7a7a90; line-height: 1.7; margin-bottom: 14px; }
-  .login-opt {
-    display: block; width: 100%; text-align: left; cursor: pointer; margin-bottom: 10px;
-    background: #1a1a28; border: 1px solid #2a3350; border-radius: 8px; padding: 12px 14px;
-    color: #cfe3ff; font-size: 13px; transition: border-color .2s, background .2s;
+  button.act:hover { background: #32326a; }
+  button.act.warn { background: #4a2020; border-color: #7a3a3a; }
+  button.act.go { background: #1e3a2a; border-color: #3a7a5a; }
+  #save-tip { font-size: 12px; color: #69db7c; margin-left: 10px; }
+
+  /* 登录页 */
+  .login-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .login-cards { grid-template-columns: 1fr; } }
+  .login-card { background: #10101a; border: 1px solid #232a44; border-radius: 14px; padding: 22px; }
+  .login-card h3 { color: #fff; font-weight: 500; margin-bottom: 8px; font-size: 16px; }
+  .login-card p { color: #7a7a90; font-size: 12px; line-height: 1.8; margin-bottom: 14px; }
+
+  /* 教程 */
+  #md { background: #10101a; border: 1px solid #232a44; border-radius: 12px; padding: 24px 28px;
+        font-size: 13px; line-height: 1.9; color: #c9d2e8; }
+  #md h1, #md h2 { color: #fff; font-size: 17px; margin: 18px 0 10px; letter-spacing: 1px; }
+  #md h3 { color: #dfe6ff; font-size: 14px; margin: 14px 0 8px; }
+  #md code { background: #0b0e18; border: 1px solid #232a44; border-radius: 4px; padding: 1px 6px; font-size: 12px; color: #8fd0ff; }
+  #md li { margin-left: 20px; }
+  #md a { color: #6ab8ff; }
+  #md hr { border: none; border-top: 1px solid #232a44; margin: 14px 0; }
+  #md blockquote { border-left: 3px solid #2a3350; padding-left: 12px; color: #8a92ac; }
+  #md table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+  #md td, #md th { border: 1px solid #232a44; padding: 4px 10px; }
+
+  /* 地图 */
+  #map { height: calc(100vh - 160px); min-height: 420px; border-radius: 12px; border: 1px solid #232a44; z-index: 1; }
+  .leaflet-container { background: #0b0e18; }
+
+  /* 退出横幅 */
+  #pending-bar {
+    display: none; margin: 0 0 12px; background: #241a10; border: 1px solid #5a4020;
+    border-radius: 10px; padding: 10px 16px; font-size: 13px; color: #f0c060;
+    align-items: center; gap: 12px;
   }
-  .login-opt:hover { border-color: #4a5a8a; background: #20203a; }
-  .login-opt b { display: block; color: #fff; font-size: 14px; margin-bottom: 3px; font-weight: 500; }
-  .login-opt span { color: #7a7a90; font-size: 11px; }
-  .login-opt[disabled] { opacity: .4; cursor: not-allowed; }
-  #login-cancel {
-    background: none; border: none; color: #55556a; cursor: pointer; font-size: 12px;
-    padding: 4px 0 0; float: right;
-  }
-  #login-cancel:hover { color: #9a9ab0; }
+  #pending-bar.show { display: flex; }
 </style>
 </head>
 <body>
-  <div id="ray-v"></div>
-  <div id="ray-h"></div>
-  <div id="dot" title="图寻助手"></div>
-  <div id="ring">
-    <div class="ring-item top" id="ri-contrib">
-      <div class="ri-title">贡献者</div>
-      <div class="ri-sub">HighPing64x · haczmrh</div>
-    </div>
-    <div class="ring-item bl" id="ri-exit">
-      <div class="ri-title">退出</div>
-      <div class="ri-sub">关闭本工具</div>
-    </div>
-    <div class="ring-item br" id="ri-gh">
-      <div class="ri-title">GitHub</div>
-      <div class="ri-sub">HighPing64x/tuxun-helper</div>
-    </div>
+  <div id="brand">
+    <div id="conn" title="后端连接状态"></div>
+    <div class="logo" onclick="go('home')"><b>TUXUN HELPER</b> <span class="ver" id="ver"></span></div>
+    <div class="spacer"></div>
   </div>
 
-  <div class="side left" id="side-tuxun">
+  <!-- ============ 主页：平台选择 ============ -->
+  <div id="ray-v" class="home-only"></div>
+  <div id="ray-h" class="home-only"></div>
+  <div id="dot" class="home-only" title="菜单"></div>
+  <div id="ring">
+    <div class="ring-item top" id="ri-contrib"><div class="ri-title">贡献者</div><div class="ri-sub">HighPing64x · haczmrh</div></div>
+    <div class="ring-item bl" id="ri-exit"><div class="ri-title">退出</div><div class="ri-sub">关闭本工具</div></div>
+    <div class="ring-item br" id="ri-gh"><div class="ri-title">GitHub</div><div class="ri-sub">HighPing64x/tuxun-helper</div></div>
+  </div>
+  <div class="side left home-only" id="side-tuxun">
     <svg class="icon" viewBox="0 0 64 64" fill="none">
-      <path d="M32 4C18 4 8 14 8 27c0 15 20 30 24 33 4-3 24-18 24-33C56 14 46 4 32 4z"
-            stroke="#ff7850" stroke-width="3" fill="rgba(255,120,80,.08)"/>
-      <text x="32" y="34" text-anchor="middle" font-size="18" fill="#ff7850"
-            font-family="Microsoft YaHei" font-weight="bold">寻</text>
+      <path d="M32 4C18 4 8 14 8 27c0 15 20 30 24 33 4-3 24-18 24-33C56 14 46 4 32 4z" stroke="#ff7850" stroke-width="3" fill="rgba(255,120,80,.08)"/>
+      <text x="32" y="34" text-anchor="middle" font-size="18" fill="#ff7850" font-family="Microsoft YaHei" font-weight="bold">寻</text>
     </svg>
     <div class="name">图 寻</div>
-    <div class="sub">TUXUN · 每日挑战 / 积分赛 / 镜像做题</div>
+    <div class="sub" id="sub-tuxun">TUXUN · 每日挑战 / 积分赛</div>
     <div class="underline"></div>
   </div>
-
-  <div class="side right" id="side-geo">
+  <div class="side right home-only" id="side-geo">
     <svg class="icon" viewBox="0 0 64 64" fill="none">
       <circle cx="32" cy="32" r="24" stroke="#5ab8ff" stroke-width="3" fill="rgba(90,184,255,.08)"/>
       <ellipse cx="32" cy="32" rx="11" ry="24" stroke="#5ab8ff" stroke-width="2"/>
@@ -179,122 +231,389 @@
       <circle cx="32" cy="32" r="3.4" fill="#5ab8ff"/>
     </svg>
     <div class="name">GEOGUESSR</div>
-    <div class="sub">每日挑战 / 经典地图 / 复盘</div>
+    <div class="sub" id="sub-geo">每日挑战 / 经典地图</div>
     <div class="underline"></div>
   </div>
 
-  <div id="title">TUXUN HELPER</div>
-  <div id="status">镜像状态加载中…</div>
+  <!-- ============ 内容视图 ============ -->
+  <div id="view"><div class="wrap">
+    <!-- 仪表盘 -->
+    <section id="v-dash" hidden>
+      <h2>仪表盘</h2>
+      <div id="pending-bar"><span id="pending-text"></span>
+        <button class="act go" onclick="cookieAns(true)">录入</button>
+        <button class="act warn" onclick="cookieAns(false)">跳过</button>
+      </div>
+      <div class="cards" id="dash-cards"></div>
+      <div class="row" id="dash-badges" style="margin-top:14px"></div>
+      <h2 style="margin-top:22px;font-size:14px">最近捕获</h2>
+      <table class="pts" id="pts-table"><thead><tr>
+        <th>时间</th><th>类型</th><th>坐标</th><th>距原点</th><th>地址</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
 
-  <div id="login-mask">
-    <div id="login-box">
-      <h3 id="login-title">登录</h3>
-      <p id="login-desc"></p>
-      <button class="login-opt" id="opt-web">
-        <b>网页登录（推荐）</b>
-        <span>全程在你自己的浏览器里完成：打开本地镜像页 → 页面内登录/扫码 → Cookie 自动录入，无需任何弹窗</span>
-      </button>
-      <button class="login-opt" id="opt-window">
-        <b>弹窗登录（官网）</b>
-        <span>弹出助手窗口打开官网登录页（若官网加载白屏，窗口内会提供"改用镜像加载"按钮）</span>
-      </button>
-      <button id="login-cancel">取消</button>
-    </div>
+    <!-- 地图 -->
+    <section id="v-map" hidden>
+      <h2>实时地图</h2>
+      <div class="row">
+        <button class="act" onclick="followLatest()">跟随最新点</button>
+        <span class="badge" id="map-info">等待捕获…</span>
+      </div>
+      <div id="map"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="v-settings" hidden>
+      <h2>设置</h2>
+      <div class="form-grid" id="settings-grid"></div>
+      <div class="row" style="margin-top:16px">
+        <button class="act" onclick="saveSettings()">保存设置</button>
+        <button class="act" id="btn-intercept" onclick="toggleIntercept()">开启拦截</button>
+        <span id="save-tip"></span>
+      </div>
+      <p style="font-size:11px;color:#5a5a70;margin-top:8px">端口类修改保存后需重启程序生效。拦截模式需要安装 mitmproxy 证书（--install-cert），镜像做题无需拦截。</p>
+    </section>
+
+    <!-- 登录 -->
+    <section id="v-login" hidden>
+      <h2>平台登录</h2>
+      <p style="font-size:12px;color:#7a7a90;margin-bottom:14px">
+        登录在本地镜像页里完成（微信扫码/邮箱），Cookie 全程自动录入到本机 .env，不需要手动复制。</p>
+      <div class="login-cards">
+        <div class="login-card">
+          <h3>图寻 <span class="badge" id="ck-tuxun">检测中</span></h3>
+          <p>进入本地镜像页（127.0.0.1:8001），点击页面右上角登录，用微信扫码确认。登录成功瞬间 Cookie 自动录入并即时生效。</p>
+          <button class="act go" onclick="webLogin('tuxun')">去镜像页登录</button>
+        </div>
+        <div class="login-card">
+          <h3>GeoGuessr <span class="badge" id="ck-geo">检测中</span></h3>
+          <p>进入本地镜像页（127.0.0.1:8002/login），用邮箱登录最稳（Google 登录需系统代理）。登录成功后 Cookie 自动录入。</p>
+          <button class="act go" onclick="webLogin('geoguessr')">去镜像页登录</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 教程 -->
+    <section id="v-tutorial" hidden>
+      <h2>使用教程</h2>
+      <div id="md">加载中…</div>
+    </section>
+  </div></div>
+
+  <!-- ============ Dock ============ -->
+  <div id="dock">
+    <button class="dk on" data-v="home" onclick="go('home')">首页</button>
+    <button class="dk" data-v="dash" onclick="go('dash')">仪表盘</button>
+    <button class="dk" data-v="map" onclick="go('map')">地图</button>
+    <button class="dk" data-v="login" onclick="go('login')">登录</button>
+    <button class="dk" data-v="settings" onclick="go('settings')">设置</button>
+    <button class="dk" data-v="tutorial" onclick="go('tutorial')">教程</button>
   </div>
 
+<script src="/vendor/leaflet.js"></script>
 <script>
-/* ---- 状态轮询（镜像/拦截/登录状态），全部走同源相对路径 ---- */
-var mirrorPorts = {}, cookieState = {};
+/* ================= 全局状态 ================= */
+var ST = null;             // /state 最新数据
+var SETTINGS = null;       // /settings 快照
+var POINTS = [];           // /points
+var VIEW = 'home';
+var map = null, tileLayer = null, markersLayer = null;
+var SETTINGS_META = [
+  ['anti_decoy', '防诱饵', 'bool', '自动排除街景元数据里的假坐标'],
+  ['near_m', '判定距离(米)', 'num', '距真值多少米内视为同一地点'],
+  ['decoy_window', '诱饵时间窗(秒)', 'num', '首坐标后该窗口内的异坐标视为疑似诱饵'],
+  ['display_delay', '显示延迟(秒)', 'num', '捕获后的延迟上屏，缓解瞬间跳图'],
+  ['api_poll', 'API直读', 'bool', '读取浏览器自身对局响应获取真实坐标（推荐开）'],
+  ['ai_auto', 'AI自动分析', 'bool', '新回合自动抓图分析并对答案（需 .env 配 AI Key）'],
+  ['name_protect', '名称保护', 'bool', '仅修改页面上显示的昵称/ID（有被检测风险）'],
+  ['oneclock_enabled', '一键特定分数', 'bool', '游戏中按热键按目标分数自动落点'],
+  ['oneclock_score', '一键目标分数', 'num', '200-4990'],
+  ['oneclock_key', '一键热键', 'text', '游戏页面获得焦点时按下生效，如 F9'],
+  ['map_size', '计分地图尺寸(km)', 'num', '0=自动（中国≈6120/世界≈14916）'],
+  ['map_tiles', '地图瓦片源', ['osm', 'amap', 'arcgis'], '网页地图瓦片源（OSM 走本地代理）'],
+  ['mirror_enabled', '启动时开启镜像', 'bool', '关掉后仅拦截模式可用（不推荐）'],
+  ['open_index', '启动打开网页', 'bool', '启动后自动打开本页面'],
+  ['log_history', '记录 history.jsonl', 'bool', '捕获点落盘记录'],
+  ['proxy_port', '拦截代理端口', 'num', '重启生效'],
+  ['mirror_port', '图寻镜像端口', 'num', '重启生效'],
+  ['mirror_port_geo', 'Geo镜像端口', 'num', '重启生效'],
+  ['control_port', '控制端口(本页)', 'num', '重启生效'],
+];
+
+/* ================= 路由 ================= */
+function go(v) {
+  VIEW = v;
+  document.body.classList.toggle('viewing', v !== 'home');
+  document.querySelectorAll('#dock .dk').forEach(function (b) {
+    b.classList.toggle('on', b.dataset.v === v);
+  });
+  ['dash', 'map', 'settings', 'login', 'tutorial'].forEach(function (s) {
+    document.getElementById('v-' + s).hidden = (s !== v);
+  });
+  if (v === 'map') setTimeout(initMap, 60);
+  if (v === 'settings' && !SETTINGS) loadSettings();
+  if (v === 'tutorial') loadTutorial();
+  if (v === 'dash') refreshPoints();
+  if (v !== 'home') window.scrollTo(0, 0);
+}
+
+/* ================= 状态轮询 ================= */
+function badge(ok, okText, noText) {
+  return '<span class="badge ' + (ok ? 'ok' : 'no') + '">' + (ok ? okText : noText) + '</span>';
+}
 function refresh() {
-  fetch('/state').then(r => r.json()).then(st => {
-    mirrorPorts = st.mirrors || {};
-    cookieState = st.cookies || {};
-    var t = mirrorPorts.tuxun ? '运行中' : '未启动';
-    var g = mirrorPorts.geoguessr ? '运行中' : '未启动';
-    var ck = function (v) { return v ? '<b style="color:#69db7c">已登录</b>' : '<b style="color:#d97a7a">未登录</b>'; };
-    document.getElementById('status').innerHTML =
-      '图寻 Cookie ' + ck(cookieState.tuxun) + ' ｜ Geo Cookie ' + ck(cookieState.geoguessr) +
-      ' ｜ 图寻镜像 <b>' + t + '</b> ｜ Geo 镜像 <b>' + g + '</b>' +
-      (mirrorPorts.tuxun ? ' ｜ 左侧进入 <b>127.0.0.1:' + mirrorPorts.tuxun + '</b>' : '') +
-      (mirrorPorts.geoguessr ? ' ｜ 右侧 <b>127.0.0.1:' + mirrorPorts.geoguessr + '</b>' : '');
-  }).catch(() => {
-    document.getElementById('status').innerText = '后端未连接（请确认 tuxun-helper 正在运行）';
+  fetch('/state').then(function (r) { return r.json(); }).then(function (st) {
+    ST = st;
+    document.getElementById('conn').classList.add('ok');
+    document.getElementById('ver').innerText = 'v' + (st.version || '2.0');
+    var m = st.mirrors || {};
+    document.getElementById('sub-tuxun').innerText = m.tuxun
+      ? '镜像运行中 · 127.0.0.1:' + m.tuxun : '镜像未启动';
+    document.getElementById('sub-geo').innerText = m.geoguessr
+      ? '镜像运行中 · 127.0.0.1:' + m.geoguessr : '镜像未启动';
+    if (VIEW === 'dash') renderDash(st);
+    if (VIEW === 'login') renderLoginBadges(st);
+    drawMapOverlays(st);
+  }).catch(function () {
+    document.getElementById('conn').classList.remove('ok');
   });
 }
-refresh(); setInterval(refresh, 3000);
-
-/* ---- 白点悬停：展开圆环 ---- */
-var dot = document.getElementById('dot');
-var ringTimer = null;
-dot.addEventListener('mouseenter', function () {
-  clearTimeout(ringTimer);
-  document.body.classList.add('ring-open');
-});
-dot.addEventListener('mouseleave', function () {
-  ringTimer = setTimeout(function () {
-    if (!document.querySelector('#ring:hover')) document.body.classList.remove('ring-open');
-  }, 260);
-});
-document.getElementById('ring').addEventListener('mouseleave', function () {
-  ringTimer = setTimeout(function () {
-    if (!dot.matches(':hover')) document.body.classList.remove('ring-open');
-  }, 260);
-});
-
-/* ---- 侧边悬停：背景切换 ---- */
-document.getElementById('side-tuxun').addEventListener('mouseenter', function () {
-  document.body.classList.add('side-hover-left'); document.body.classList.remove('side-hover-right');
-});
-document.getElementById('side-geo').addEventListener('mouseenter', function () {
-  document.body.classList.add('side-hover-right'); document.body.classList.remove('side-hover-left');
-});
-/* ---- 未登录平台：双模式登录选择 ---- */
-var loginPlat = null;
-function askLogin(plat) {
-  loginPlat = plat;
-  var mirrorOn = plat === 'tuxun' ? !!mirrorPorts.tuxun : !!mirrorPorts.geoguessr;
-  var name = plat === 'tuxun' ? '图寻' : 'GeoGuessr';
-  document.getElementById('login-title').innerText = '登录' + name;
-  document.getElementById('login-desc').innerText = plat === 'tuxun'
-    ? '支持微信扫码。登录 Cookie 全程自动录入，无需手动复制。'
-    : '可用邮箱/Google 登录（Google 登录需系统代理）。Cookie 全程自动录入。';
-  var web = document.getElementById('opt-web');
-  if (mirrorOn) {
-    web.disabled = false;
-    web.querySelector('span').innerText = '打开本地镜像页 → 页面内登录/扫码 → Cookie 自动录入，无需任何弹窗';
-  } else {
-    web.disabled = true;
-    web.querySelector('span').innerText = '镜像未启动（启动参数加 --mirror 或开启 mirror_enabled 后可用）';
-  }
-  document.getElementById('login-mask').classList.add('show');
+function renderDash(st) {
+  var f = function (p) { return p ? (+p.lat).toFixed(5) + ', ' + (+p.lng).toFixed(5) : '—'; };
+  var cards = [
+    ['原点', f(st.origin), 'gold'], ['目前', f(st.current), 'green'], ['答案', f(st.answer), 'blue'],
+    ['诱饵', st.decoys, 'red'], ['候选', st.candidates, 'orange'],
+    ['回合模式', st.round_move === true ? '可移动' : (st.round_move === false ? '无移动' : '—'), ''],
+  ];
+  document.getElementById('dash-cards').innerHTML = cards.map(function (c) {
+    return '<div class="card"><div class="k">' + c[0] + '</div><div class="v ' + c[2] + '">' + c[1] + '</div></div>';
+  }).join('');
+  var m = st.mirrors || {}, ck = st.cookies || {};
+  document.getElementById('dash-badges').innerHTML =
+    badge(!!m.tuxun, '图寻镜像 ' + m.tuxun, '图寻镜像关') + ' ' +
+    badge(!!m.geoguessr, 'Geo镜像 ' + m.geoguessr, 'Geo镜像关') + ' ' +
+    badge(ck.tuxun, '图寻已登录', '图寻未登录') + ' ' +
+    badge(ck.geoguessr, 'Geo已登录', 'Geo未登录') + ' ' +
+    badge(st.intercept, '拦截开启', '拦截关闭') + ' ' +
+    (st.pending_cookie
+      ? '<span class="badge" style="color:#f0c060;border-color:#5a4020">待录入 ' + st.pending_cookie + ' Cookie</span>'
+      : '');
+  var pb = document.getElementById('pending-bar');
+  if (st.pending_cookie) {
+    pb.classList.add('show');
+    document.getElementById('pending-text').innerText = '检测到 ' + st.pending_cookie + ' 的 Cookie，是否录入？（镜像内登录会自动录入，此询问仅拦截模式出现）';
+  } else pb.classList.remove('show');
 }
-document.getElementById('opt-web').addEventListener('click', function () {
-  if (this.disabled || !loginPlat) return;
-  location.href = 'http://127.0.0.1:' + mirrorPorts[loginPlat] + (loginPlat === 'geoguessr' ? '/login' : '/');
-});
-document.getElementById('opt-window').addEventListener('click', function () {
-  if (!loginPlat) return;
-  document.getElementById('login-mask').classList.remove('show');
-  fetch('/login/' + loginPlat, { method: 'POST' });
-});
-document.getElementById('login-cancel').addEventListener('click', function () {
-  document.getElementById('login-mask').classList.remove('show');
-});
-document.getElementById('login-mask').addEventListener('click', function (e) {
-  if (e.target === this) this.classList.remove('show');
-});
+function renderLoginBadges(st) {
+  var ck = st.cookies || {};
+  var t = document.getElementById('ck-tuxun'), g = document.getElementById('ck-geo');
+  t.className = 'badge ' + (ck.tuxun ? 'ok' : 'no'); t.innerText = ck.tuxun ? '已登录' : '未登录';
+  g.className = 'badge ' + (ck.geoguessr ? 'ok' : 'no'); g.innerText = ck.geoguessr ? '已登录' : '未登录';
+}
+function cookieAns(accept) {
+  fetch('/cookie', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accept: accept }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { alert(j.message || 'done'); refresh(); });
+}
+function webLogin(plat) {
+  fetch('/login/' + plat, { method: 'POST' }).then(function (r) { return r.json(); })
+    .then(function (j) { if (j.url) location.href = j.url; });
+}
 
+/* ================= 捕获点列表 ================= */
+function refreshPoints() {
+  fetch('/points').then(function (r) { return r.json(); }).then(function (j) {
+    POINTS = j.points || [];
+    if (VIEW !== 'dash') return;
+    var tb = document.querySelector('#pts-table tbody');
+    tb.innerHTML = POINTS.slice().reverse().map(function (p, idx) {
+      var t = p.time ? String(p.time).slice(5) : '';
+      var kind = p.kind || 'main';
+      var kn = { main: '原点', decoy: '诱饵', candidate: '候选', moved: '目前', answer: '答案' }[kind] || kind;
+      var dist = p.from_origin_m != null ? Math.round(p.from_origin_m) + ' m' : '';
+      return '<tr onclick="showOnMap(' + (POINTS.length - 1 - idx) + ')"><td>' + t + '</td><td>' +
+        '<span class="kind ' + kind + '">' + kn + '</span></td><td>' +
+        (+p.lat).toFixed(5) + ', ' + (+p.lng).toFixed(5) + '</td><td>' + dist + '</td><td>' +
+        (p.address || '') + '</td></tr>';
+    }).join('');
+  }).catch(function () {});
+}
+
+/* ================= 地图 ================= */
+function initMap() {
+  if (map) { setTimeout(drawMapOverlays, 50); return; }
+  var tiles = (SETTINGS && SETTINGS.map_tiles) || 'osm';
+  var conf = {
+    osm:    { url: '/tiles/osm/{z}/{x}/{y}.png', attr: '© OpenStreetMap' },
+    amap:   { url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x={x}&y={y}&z={z}',
+              attr: '© 高德地图', sub: '1234' },
+    arcgis: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+              attr: 'Esri World Imagery' }
+  }[tiles] || { url: '/tiles/osm/{z}/{x}/{y}.png', attr: '© OpenStreetMap' };
+  map = L.map('map', { zoomControl: true }).setView([32, 110], 4);
+  tileLayer = L.tileLayer(conf.url, { attribution: conf.attr, subdomains: conf.sub || 'abc', maxZoom: 19 });
+  tileLayer.addTo(map);
+  markersLayer = L.layerGroup().addTo(map);
+  drawMapOverlays(ST);
+}
+function dotIcon(color) {
+  return L.divIcon({ className: '', iconSize: [12, 12],
+    html: '<div style="width:12px;height:12px;border-radius:50%;background:' + color +
+          ';box-shadow:0 0 8px ' + color + ';border:1px solid rgba(255,255,255,.7)"></div>' });
+}
+function drawMapOverlays(st) {
+  if (!map || !markersLayer) return;
+  markersLayer.clearLayers();
+  var latest = null;
+  if (st) {
+    if (st.origin) addDot(st.origin, '#FFD700', '原点（答案）', true);
+    if (st.answer) addDot(st.answer, '#4FC3F7', '答案揭示', false);
+    if (st.current) addDot(st.current, '#69db7c', '目前位置', false);
+  }
+  POINTS.forEach(function (p) {
+    if (!p.lat || !p.lng) return;
+    var c = p.kind === 'decoy' ? '#d97a7a' : (p.kind === 'candidate' ? '#f0a35e' : null);
+    if (c) addDot(p, c, p.kind === 'decoy' ? '诱饵' : '候选', false);
+    latest = (p.kind === 'main' || p.kind === 'moved') ? p : latest;
+  });
+}
+function addDot(p, color, label, fly) {
+  L.marker([p.lat, p.lng], { icon: dotIcon(color) }).addTo(markersLayer)
+    .bindPopup('<b>' + label + '</b><br>' + (+p.lat).toFixed(5) + ', ' + (+p.lng).toFixed(5) +
+               (p.address ? '<br>' + p.address : ''));
+}
+function followLatest() {
+  var pts = POINTS.filter(function (p) { return p.kind === 'main' || p.kind === 'moved'; });
+  var p = pts[pts.length - 1] || ST && ST.origin;
+  if (p && map) { map.setView([p.lat, p.lng], Math.max(map.getZoom(), 12)); }
+}
+function showOnMap(idx) {
+  go('map');
+  var p = POINTS[idx];
+  if (p && map) setTimeout(function () {
+    map.setView([p.lat, p.lng], Math.max(map.getZoom(), 13));
+  }, 150);
+}
+
+/* ================= 设置 ================= */
+function loadSettings() {
+  fetch('/settings').then(function (r) { return r.json(); }).then(function (j) {
+    SETTINGS = j.settings || {};
+    renderSettings();
+  }).catch(function () {});
+}
+function renderSettings() {
+  var g = document.getElementById('settings-grid');
+  g.innerHTML = SETTINGS_META.map(function (m) {
+    var key = m[0], val = SETTINGS[key];
+    var input;
+    if (m[2] === 'bool') {
+      input = '<input type="checkbox" data-k="' + key + '"' + (val ? ' checked' : '') + '>';
+    } else if (m[2] === 'num') {
+      input = '<input type="number" step="any" data-k="' + key + '" value="' + (val == null ? 0 : val) + '">';
+    } else if (Array.isArray(m[2])) {
+      input = '<select data-k="' + key + '">' + m[2].map(function (o) {
+        return '<option' + (o === val ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select>';
+    } else {
+      input = '<input type="text" data-k="' + key + '" value="' + (val == null ? '' : val) + '">';
+    }
+    return '<label class="f"><span>' + m[1] + '<div class="hint">' + m[3] + '</div></span>' + input + '</label>';
+  }).join('');
+  var bi = document.getElementById('btn-intercept');
+  bi.innerText = SETTINGS.intercept ? '关闭拦截' : '开启拦截';
+  bi.classList.toggle('warn', !!SETTINGS.intercept);
+}
+function saveSettings() {
+  var body = {};
+  document.querySelectorAll('#settings-grid [data-k]').forEach(function (el) {
+    var k = el.dataset.k;
+    if (el.type === 'checkbox') body[k] = el.checked;
+    else if (el.type === 'number') body[k] = parseFloat(el.value) || 0;
+    else body[k] = el.value;
+  });
+  body.name_protect = !!body.name_protect;
+  fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j.settings) SETTINGS = j.settings;
+      var tip = document.getElementById('save-tip');
+      tip.innerText = '已保存' + (body.proxy_port !== undefined || body.mirror_port !== undefined ||
+        body.mirror_port_geo !== undefined || body.control_port !== undefined ? '（端口类需重启生效）' : '');
+      setTimeout(function () { tip.innerText = ''; }, 4000);
+    }).catch(function () {});
+}
+function toggleIntercept() {
+  var action = (SETTINGS && SETTINGS.intercept) ? '/proxy/stop' : '/proxy/start';
+  fetch(action, { method: 'POST' }).then(function (r) { return r.json(); })
+    .then(function (j) { alert(j.message || ''); loadSettings(); refresh(); });
+}
+
+/* ================= 教程（极简 md 渲染） ================= */
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+}
+function loadTutorial() {
+  if (document.getElementById('md').dataset.loaded) return;
+  fetch('/tutorial.md').then(function (r) { return r.text(); }).then(function (md) {
+    var html = [], inList = false, inCode = false, inTable = false;
+    md.split('\n').forEach(function (ln) {
+      var line = ln.replace(/\s+$/, '');
+      if (line.startsWith('```')) { inCode = !inCode;
+        html.push(inCode ? '<pre><code>' : '</code></pre>'); return; }
+      if (inCode) { html.push(esc(ln)); return; }
+      if (line.startsWith('|')) {
+        if (!inTable) { inTable = true; html.push('<table>'); }
+        if (!/^\|[\s:|-]+\|$/.test(line)) {
+          html.push('<tr>' + line.split('|').slice(1, -1).map(function (c) {
+            return '<td>' + inline(c.trim()) + '</td>'; }).join('') + '</tr>');
+        }
+        return;
+      }
+      if (inTable) { inTable = false; html.push('</table>'); }
+      if (/^- /.test(line)) { if (!inList) { inList = true; html.push('<ul>'); } html.push('<li>' + inline(line.slice(2)) + '</li>'); return; }
+      if (inList) { inList = false; html.push('</ul>'); }
+      if (/^### /.test(line)) html.push('<h3>' + inline(line.slice(4)) + '</h3>');
+      else if (/^## /.test(line)) html.push('<h2>' + inline(line.slice(3)) + '</h2>');
+      else if (/^# /.test(line)) html.push('<h1>' + inline(line.slice(2)) + '</h1>');
+      else if (/^> /.test(line)) html.push('<blockquote>' + inline(line.slice(2)) + '</blockquote>');
+      else if (/^---+$/.test(line)) html.push('<hr>');
+      else if (line.trim()) html.push('<p>' + inline(line) + '</p>');
+    });
+    if (inList) html.push('</ul>');
+    if (inTable) html.push('</table>');
+    document.getElementById('md').innerHTML = html.join('');
+    document.getElementById('md').dataset.loaded = '1';
+  }).catch(function () { document.getElementById('md').innerText = '教程加载失败'; });
+}
+
+/* ================= 主页交互 ================= */
+document.getElementById('side-tuxun').addEventListener('mouseenter', function () {
+  document.body.classList.add('side-hover-left'); document.body.classList.remove('side-hover-right'); });
+document.getElementById('side-geo').addEventListener('mouseenter', function () {
+  document.body.classList.add('side-hover-right'); document.body.classList.remove('side-hover-left'); });
 document.getElementById('side-tuxun').addEventListener('click', function () {
-  if (mirrorPorts.tuxun) { location.href = 'http://127.0.0.1:' + mirrorPorts.tuxun + '/'; return; }
-  askLogin('tuxun');
+  if (ST && ST.mirrors && ST.mirrors.tuxun) location.href = 'http://127.0.0.1:' + ST.mirrors.tuxun + '/';
+  else go('login');
 });
 document.getElementById('side-geo').addEventListener('click', function () {
-  if (mirrorPorts.geoguessr) { location.href = 'http://127.0.0.1:' + mirrorPorts.geoguessr + '/'; return; }
-  if (cookieState.geoguessr) { alert('GeoGuessr 镜像未启动（Cookie 已有，请重启程序）'); return; }
-  askLogin('geoguessr');
+  if (ST && ST.mirrors && ST.mirrors.geoguessr) location.href = 'http://127.0.0.1:' + ST.mirrors.geoguessr + '/';
+  else go('login');
 });
-
-/* ---- 圆环三分区动作 ---- */
+var dot = document.getElementById('dot'), ringTimer = null;
+dot.addEventListener('mouseenter', function () {
+  clearTimeout(ringTimer); document.body.classList.add('ring-open'); });
+dot.addEventListener('mouseleave', function () {
+  ringTimer = setTimeout(function () {
+    if (!document.querySelector('#ring:hover')) document.body.classList.remove('ring-open'); }, 260); });
+document.getElementById('ring').addEventListener('mouseleave', function () {
+  ringTimer = setTimeout(function () {
+    if (!dot.matches(':hover')) document.body.classList.remove('ring-open'); }, 260); });
 document.getElementById('ri-exit').addEventListener('click', function () {
   if (confirm('确定退出图寻助手？（系统代理设置将自动还原）')) {
     fetch('/shutdown', { method: 'POST' });
@@ -302,11 +621,13 @@ document.getElementById('ri-exit').addEventListener('click', function () {
   }
 });
 document.getElementById('ri-gh').addEventListener('click', function () {
-  window.open('https://github.com/HighPing64x/tuxun-helper', '_blank');
-});
+  window.open('https://github.com/HighPing64x/tuxun-helper', '_blank'); });
 document.getElementById('ri-contrib').addEventListener('click', function () {
-  window.open('https://github.com/HighPing64x/tuxun-helper/graphs/contributors', '_blank');
-});
+  window.open('https://github.com/HighPing64x/tuxun-helper/graphs/contributors', '_blank'); });
+
+/* ================= 启动 ================= */
+refresh(); setInterval(refresh, 2000);
+setInterval(function () { if (VIEW === 'dash' || VIEW === 'map') refreshPoints(); }, 3000);
 </script>
 </body>
 </html>
