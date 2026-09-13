@@ -51,3 +51,4 @@ _*.js
 
 # 本地瓦片缓存（OSM 代理）
 cache/
+_mirror_session_*.txt

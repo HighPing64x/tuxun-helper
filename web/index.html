@@ -109,6 +109,35 @@
     font-size: 15px; letter-spacing: 8px; color: #8a8aa8; font-weight: 300;
   }
   a { color: inherit; text-decoration: none; }
+
+  /* ---- 登录方式选择对话框 ---- */
+  #login-mask {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(4px);
+  }
+  #login-mask.show { display: flex; align-items: center; justify-content: center; }
+  #login-box {
+    width: 380px; max-width: 90vw; background: #12121c; border: 1px solid #2a3350;
+    border-radius: 12px; padding: 22px 24px; box-shadow: 0 12px 48px rgba(0,0,0,.6);
+    animation: pop .25s cubic-bezier(.22,.9,.3,1);
+  }
+  @keyframes pop { from { transform: scale(.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  #login-box h3 { font-size: 16px; color: #fff; font-weight: 500; margin-bottom: 6px; }
+  #login-box p { font-size: 12px; color: #7a7a90; line-height: 1.7; margin-bottom: 14px; }
+  .login-opt {
+    display: block; width: 100%; text-align: left; cursor: pointer; margin-bottom: 10px;
+    background: #1a1a28; border: 1px solid #2a3350; border-radius: 8px; padding: 12px 14px;
+    color: #cfe3ff; font-size: 13px; transition: border-color .2s, background .2s;
+  }
+  .login-opt:hover { border-color: #4a5a8a; background: #20203a; }
+  .login-opt b { display: block; color: #fff; font-size: 14px; margin-bottom: 3px; font-weight: 500; }
+  .login-opt span { color: #7a7a90; font-size: 11px; }
+  .login-opt[disabled] { opacity: .4; cursor: not-allowed; }
+  #login-cancel {
+    background: none; border: none; color: #55556a; cursor: pointer; font-size: 12px;
+    padding: 4px 0 0; float: right;
+  }
+  #login-cancel:hover { color: #9a9ab0; }
 </style>
 </head>
 <body>
@@ -157,6 +186,22 @@
   <div id="title">TUXUN HELPER</div>
   <div id="status">镜像状态加载中…</div>
 
+  <div id="login-mask">
+    <div id="login-box">
+      <h3 id="login-title">登录</h3>
+      <p id="login-desc"></p>
+      <button class="login-opt" id="opt-web">
+        <b>网页登录（推荐）</b>
+        <span>全程在你自己的浏览器里完成：打开本地镜像页 → 页面内登录/扫码 → Cookie 自动录入，无需任何弹窗</span>
+      </button>
+      <button class="login-opt" id="opt-window">
+        <b>弹窗登录（官网）</b>
+        <span>弹出助手窗口打开官网登录页（若官网加载白屏，窗口内会提供"改用镜像加载"按钮）</span>
+      </button>
+      <button id="login-cancel">取消</button>
+    </div>
+  </div>
+
 <script>
 /* ---- 状态轮询（镜像/拦截/登录状态），全部走同源相对路径 ---- */
 var mirrorPorts = {}, cookieState = {};
@@ -203,21 +248,50 @@ document.getElementById('side-tuxun').addEventListener('mouseenter', function ()
 document.getElementById('side-geo').addEventListener('mouseenter', function () {
   document.body.classList.add('side-hover-right'); document.body.classList.remove('side-hover-left');
 });
+/* ---- 未登录平台：双模式登录选择 ---- */
+var loginPlat = null;
+function askLogin(plat) {
+  loginPlat = plat;
+  var mirrorOn = plat === 'tuxun' ? !!mirrorPorts.tuxun : !!mirrorPorts.geoguessr;
+  var name = plat === 'tuxun' ? '图寻' : 'GeoGuessr';
+  document.getElementById('login-title').innerText = '登录' + name;
+  document.getElementById('login-desc').innerText = plat === 'tuxun'
+    ? '支持微信扫码。登录 Cookie 全程自动录入，无需手动复制。'
+    : '可用邮箱/Google 登录（Google 登录需系统代理）。Cookie 全程自动录入。';
+  var web = document.getElementById('opt-web');
+  if (mirrorOn) {
+    web.disabled = false;
+    web.querySelector('span').innerText = '打开本地镜像页 → 页面内登录/扫码 → Cookie 自动录入，无需任何弹窗';
+  } else {
+    web.disabled = true;
+    web.querySelector('span').innerText = '镜像未启动（启动参数加 --mirror 或开启 mirror_enabled 后可用）';
+  }
+  document.getElementById('login-mask').classList.add('show');
+}
+document.getElementById('opt-web').addEventListener('click', function () {
+  if (this.disabled || !loginPlat) return;
+  location.href = 'http://127.0.0.1:' + mirrorPorts[loginPlat] + (loginPlat === 'geoguessr' ? '/login' : '/');
+});
+document.getElementById('opt-window').addEventListener('click', function () {
+  if (!loginPlat) return;
+  document.getElementById('login-mask').classList.remove('show');
+  fetch('/login/' + loginPlat, { method: 'POST' });
+});
+document.getElementById('login-cancel').addEventListener('click', function () {
+  document.getElementById('login-mask').classList.remove('show');
+});
+document.getElementById('login-mask').addEventListener('click', function (e) {
+  if (e.target === this) this.classList.remove('show');
+});
+
 document.getElementById('side-tuxun').addEventListener('click', function () {
   if (mirrorPorts.tuxun) { location.href = 'http://127.0.0.1:' + mirrorPorts.tuxun + '/'; return; }
-  if (confirm('图寻镜像未启动。是否打开官网登录（可微信扫码，Cookie 自动录入）？登录后重启程序即可开镜像。')) {
-    fetch('/login/tuxun', { method: 'POST' });
-  }
+  askLogin('tuxun');
 });
 document.getElementById('side-geo').addEventListener('click', function () {
   if (mirrorPorts.geoguessr) { location.href = 'http://127.0.0.1:' + mirrorPorts.geoguessr + '/'; return; }
-  if (cookieState.geoguessr) {
-    alert('GeoGuessr 镜像未启动（Cookie 已有，请重启程序）');
-    return;
-  }
-  if (confirm('GeoGuessr 未登录。要在弹出的助手窗口打开官网登录吗？登录后 Cookie 自动录入、镜像自动可用。')) {
-    fetch('/login/geoguessr', { method: 'POST' });
-  }
+  if (cookieState.geoguessr) { alert('GeoGuessr 镜像未启动（Cookie 已有，请重启程序）'); return; }
+  askLogin('geoguessr');
 });
 
 /* ---- 圆环三分区动作 ---- */

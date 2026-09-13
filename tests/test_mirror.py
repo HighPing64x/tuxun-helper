@@ -110,6 +110,40 @@ def test_set_cookie():
     print("2. Set-Cookie 剥离: 通过 ->", sc)
 
 
+def test_mirror_login_capture():
+    """镜像登录捕获链：Set-Cookie -> jar 会话文件 -> .env 持久化。"""
+    saved = {}
+    tuxun_proxy.upsert_env_line = lambda k, v: saved.__setitem__(k, v)
+    app, rw = make()
+    f = FakeFlow("https://tuxun.fun/api/v0/login/loginByWXPublicCode", "{}", ct="application/json")
+    f.response.headers["set-cookie"] = (
+        "fun_ticket=TICKET123; Path=/; Domain=.tuxun.fun; Secure; HttpOnly; SameSite=None")
+    rw.response(f)
+    time.sleep(0.4)  # note_mirror_login 在后台线程执行
+    assert saved.get("TUXUN_COOKIE") == "fun_ticket=TICKET123", saved
+    assert os.path.isfile("_mirror_session_tuxun.txt"), "jar 会话文件未写入"
+    with open("_mirror_session_tuxun.txt", encoding="utf-8") as fh:
+        assert fh.read().strip() == "fun_ticket=TICKET123", "会话文件应只含 name=value 对"
+    os.remove("_mirror_session_tuxun.txt")
+    print("10. 镜像登录捕获（Set-Cookie -> jar -> .env）: 通过")
+
+
+def test_location_rewrite():
+    """登录回调 3xx：Location 指向上游域名应改写回本地镜像。"""
+    app, rw = make()
+    f = FakeFlow("https://tuxun.fun/api/v0/login/callback", "")
+    f.response._t = ""
+    f.response.headers["content-type"] = "text/html"
+    f.response.headers["location"] = "https://tuxun.fun/?code=abc&state=x"
+    rw.response(f)
+    loc = f.response.headers.get("location")
+    assert loc == "http://127.0.0.1:8001/?code=abc&state=x", loc
+    # URL 编码变体（redirect_uri 参数）
+    assert rw._rewrite_text("https%3A%2F%2Ftuxun.fun%2Fapi%2Fx") == \
+        "http%3A%2F%2F127.0.0.1%3A8001%2Fapi%2Fx"
+    print("11. Location 改写 + URL 编码变体: 通过")
+
+
 def test_json_rewrite():
     app, rw = make()
     f = FakeFlow("https://tuxun.fun/api/v0/x", '{"u":"https://tuxun.fun/api"}', ct="application/json")
@@ -223,4 +257,6 @@ if __name__ == "__main__":
     test_overlay_v2()
     test_tiles_and_login_route()
     test_login_cookie_header()
+    test_mirror_login_capture()
+    test_location_rewrite()
     print("== 镜像模式单元测试全部通过 ==")

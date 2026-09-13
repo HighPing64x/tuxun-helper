@@ -859,14 +859,23 @@ class MirrorRewrite:
         # 平台前端把 API/静态资源地址硬编码在 JS/HTML 里，全部改写到本地镜像
         text = text.replace(self.origin, self._local)
         text = text.replace(self.origin.replace("/", "\\/"), self._local.replace("/", "\\/"))
+        # URL 编码变体（OAuth/跳转参数里的 redirect_uri 等）
+        enc_o = self.origin.replace(":", "%3A").replace("/", "%2F")
+        enc_l = self._local.replace(":", "%3A").replace("/", "%2F")
+        text = text.replace(enc_o, enc_l)
+        text = text.replace(enc_o.lower(), enc_l.lower())
         text = text.replace(f"wss://{self.origin_host}", self._ws_local)
         text = text.replace(f"wss:\/\/{self.origin_host}", self._ws_local)
         if self.cdn_origin:
             text = text.replace(self.cdn_origin, f"{self._local}/cdn")
         return text
 
-    @staticmethod
-    def _fix_set_cookie(headers) -> None:
+    def _fix_set_cookie(self, headers) -> None:
+        """去掉 Domain/Secure（镜像域为 127.0.0.1 + http），并把会话 Cookie 收进 jar。
+
+        登录事件（图寻 fun_ticket / Geo session）额外持久化到 .env，
+        让 API 直读 / AI 模式 / 重启后依然可用 —— 全网页端登录的落袋环节。
+        """
         values = headers.get_all("set-cookie") if hasattr(headers, "get_all") else []
         if not values:
             return
@@ -876,19 +885,22 @@ class MirrorRewrite:
             pass
         import re as _re
 
+        pairs = []
         for v in values:
             v = _re.sub(r"Domain=[^;]+;?\s*", "", v, flags=_re.I)
             v = _re.sub(r"Secure;?\s*", "", v, flags=_re.I)
             headers.append("set-cookie", v)
-        joined = "; ".join(values)
-        if "fun_ticket=" in joined or "SESSION=" in joined or "session=" in joined:
-            MirrorRewrite._cookie_store_update(joined)
-
-    _cookie_store: dict = {}
-
-    @staticmethod
-    def _cookie_store_update(joined: str) -> None:
-        MirrorRewrite._cookie_store["value"] = joined
+            first = v.split(";", 1)[0].strip()  # 只留 name=value，丢掉 Path/HttpOnly 等属性
+            if "=" in first and first not in pairs:
+                pairs.append(first)
+        if not pairs:
+            return
+        joined = "; ".join(pairs)
+        self.jar.update(joined)
+        must = "fun_ticket=" if self.kind == "tuxun" else "session="
+        if must in joined:
+            threading.Thread(target=self.app.note_mirror_login,
+                             args=(self.kind, joined), daemon=True).start()
 
     def response(self, flow: "http.HTTPFlow") -> None:
         # 坐标/对局捕获与主拦截完全一致（反向模式下 host 仍为上游域名）
@@ -896,6 +908,15 @@ class MirrorRewrite:
             self.interceptor.response(flow)
         if flow.response is None:
             return
+        # 3xx 跳转（登录回调等）：Location 指向上游域名会把用户带离镜像，改写回本地
+        try:
+            loc = flow.response.headers.get("location")
+            if loc:
+                new_loc = self._rewrite_text(loc)
+                if new_loc != loc:
+                    flow.response.headers["location"] = new_loc
+        except Exception as exc:
+            logger.debug("Location 改写失败: %s", exc)
         try:
             self._fix_set_cookie(flow.response.headers)
         except Exception as exc:
@@ -1504,6 +1525,7 @@ def _cookies_header_for(cookies, plat: str) -> str:
     """从 pywebview get_cookies() 结果筛出平台 Cookie 拼成请求头；未登录返回空串。
 
     判定标准：图寻须有 fun_ticket（微信扫码登录后下发），GeoGuessr 须有 session。
+    域名接受平台官网或本地镜像（webview 在 127.0.0.1 镜像页登录时 cookie 为本地域）。
     """
     need_domain = "tuxun" if plat == "tuxun" else "geoguessr"
     must = "fun_ticket" if plat == "tuxun" else "session"
@@ -1513,16 +1535,33 @@ def _cookies_header_for(cookies, plat: str) -> str:
             name, value, domain = c.name, c.value, (c.domain or "")
         except AttributeError:
             continue
-        if need_domain not in domain:
+        if need_domain not in domain and "127.0.0.1" not in domain and "localhost" not in domain:
             continue
         names.add(name)
         pairs.append(f"{name}={value}")
     return "; ".join(pairs) if must in names else ""
 
 
+class _LoginBridge:
+    """独立登录窗口的 js_api 桥：白屏时切换镜像 / 取消登录。"""
+
+    def __init__(self) -> None:
+        self.use_mirror = False
+        self.cancelled = False
+
+    def login_use_mirror(self) -> dict:
+        self.use_mirror = True
+        return {"status": "success", "message": "ok"}
+
+    def cancel_login(self) -> dict:
+        self.cancelled = True
+        return {"status": "success", "message": "ok"}
+
+
 def run_standalone_login(plat: str) -> None:
-    """--login 入口：独立登录窗口。打开官网正常登录（图寻可微信扫码），
-    工具后台轮询 Cookie，抓到后自动写入 .env 并关闭窗口。"""
+    """--login 入口：独立登录窗口（单窗口+官网模式）。
+    打开官网正常登录（图寻可微信扫码），自动抓 Cookie 写 .env；
+    官网白屏时窗口内提供「改用镜像加载」按钮。"""
     if not WEBVIEW_AVAILABLE:
         print("未安装 pywebview，无法打开登录窗口。请执行: pip install \"pywebview>=5,<6\"")
         return
@@ -1530,19 +1569,26 @@ def run_standalone_login(plat: str) -> None:
 
     label = "图寻" if plat == "tuxun" else "GeoGuessr"
     key = "TUXUN_COOKIE" if plat == "tuxun" else "GEOGUESSR_COOKIE"
-    url = "https://tuxun.fun/" if plat == "tuxun" else "https://www.geoguessr.com/"
+    url = "https://tuxun.fun/" if plat == "tuxun" else "https://www.geoguessr.com/login"
+    config = load_config()
+    mirror_port = int(config.get("mirror_port" if plat == "tuxun" else "mirror_port_geo",
+                                 8001 if plat == "tuxun" else 8002))
+    mirror_url = f"http://127.0.0.1:{mirror_port}/" + ("" if plat == "tuxun" else "login")
     result = {"message": f"未完成 {label} 登录（窗口已关闭或 5 分钟超时）。"}
+    bridge = _LoginBridge()
 
     def poll(window):
         deadline = time.time() + 300
+        stall = time.time() + 12
+        banner_shown = False
         while time.time() < deadline:
             time.sleep(2)
-            if window not in _wv.windows:  # 用户手动关窗
+            if window not in _wv.windows or bridge.cancelled:  # 用户手动关窗/取消
                 return
             try:
                 cookies = window.get_cookies()
             except Exception:
-                continue
+                cookies = None
             header = _cookies_header_for(cookies, plat)
             if header:
                 try:
@@ -1555,12 +1601,31 @@ def run_standalone_login(plat: str) -> None:
                     logger.error("%s", result["message"])
                 window.destroy()
                 return
-        try:
-            window.destroy()
-        except Exception:
-            pass
+            if not banner_shown and not bridge.use_mirror and time.time() > stall:
+                try:
+                    window.evaluate_js(
+                        "(function(){if(window.__TX_MIRROR_FB)return;window.__TX_MIRROR_FB=1;"
+                        "if(!document.body)return;var b=document.createElement('div');"
+                        "b.innerText='页面空白？点此改用本地镜像加载（同样自动录入Cookie）';"
+                        "b.style.cssText='position:fixed;top:10px;left:50%;transform:translateX(-50%);"
+                        "z-index:2147483647;background:#1b2438;color:#ffd700;border:1px solid #33456e;"
+                        "border-radius:6px;padding:8px 14px;cursor:pointer;font:13px Microsoft YaHei';"
+                        "b.onclick=function(){if(window.pywebview&&pywebview.api)pywebview.api.login_use_mirror();};"
+                        "document.body.appendChild(b);})()")
+                    banner_shown = True
+                except Exception:
+                    pass
+            if bridge.use_mirror:
+                banner_shown = True  # 已切换，不再重复注入
+                try:
+                    if (window.get_current_url() or "").rstrip("/") != mirror_url.rstrip("/"):
+                        window.load_url(mirror_url)
+                        stall = time.time() + 3600
+                except Exception:
+                    pass
 
-    window = _wv.create_window(f"图寻助手 · 登录{label}", url, width=1100, height=800)
+    window = _wv.create_window(f"图寻助手 · 登录{label}", url,
+                               width=1100, height=800, js_api=bridge)
     threading.Thread(target=poll, args=(window,), daemon=True, name="login-poll").start()
     _wv.start()
     print(f"[登录] {result['message']}")
@@ -1602,6 +1667,8 @@ class TuxunApp:
         self._last_seen_cookie: dict = {}
         self.pending_cookie: Optional[Tuple[str, str]] = None  # (platform, cookie_header)
         self._login_busy = False       # 内置登录窗口进行中标记
+        self._login_use_mirror = False  # 登录窗口内用户选择改用镜像加载
+        self._mirror_login_header = {}  # 镜像通道捕获的登录 Cookie（平台 -> 头，值不入日志）
 
     # ------------------------------------------------------------------
     # Cookie 自动录入
@@ -1663,6 +1730,27 @@ class TuxunApp:
     # ------------------------------------------------------------------
     # 内置登录窗口：打开官网让用户正常登录（图寻可扫码），自动抓 Cookie 写入 .env
     # ------------------------------------------------------------------
+    def note_mirror_login(self, plat: str, cookie_header: str) -> None:
+        """全网页端登录的落袋环节：镜像捕获到登录 Cookie（fun_ticket/session）后，
+        写入 .env 并热更新会话。幂等：值未变化时不重复写。"""
+        key = "TUXUN_COOKIE" if plat == "tuxun" else "GEOGUESSR_COOKIE"
+        label = "图寻" if plat == "tuxun" else "GeoGuessr"
+        current = os.getenv(key, "").strip()
+        must = "fun_ticket=" if plat == "tuxun" else "session="
+        if must not in cookie_header or cookie_header.strip() == current:
+            return
+        try:
+            upsert_env_line(key, cookie_header.strip())
+            os.environ[key] = cookie_header.strip()
+            self.cookies_known[plat] = True
+            self._mirror_login_header[plat] = cookie_header.strip()
+            if plat == "tuxun":
+                self.api_reader.refresh_agent()
+            logger.info("镜像捕获 %s 登录 Cookie，已写入 .env（值不入日志）", label)
+            print(f"[登录] 检测到 {label} 登录成功，Cookie 已自动录入。")
+        except Exception as exc:
+            logger.error("镜像登录 Cookie 写入失败（平台=%s）: %s", plat, exc)
+
     def login_platform(self, plat: str) -> dict:
         """（GUI）把当前窗口导航到平台官网，后台轮询 Cookie，成功后自动返回助手页面。"""
         if plat not in ("tuxun", "geoguessr"):
@@ -1688,16 +1776,26 @@ class TuxunApp:
         key = "TUXUN_COOKIE" if plat == "tuxun" else "GEOGUESSR_COOKIE"
         message = f"未完成 {label} 登录（5 分钟超时），已返回。"
         try:
+            mirror_port = int(self.config.get("mirror_port" if plat == "tuxun" else "mirror_port_geo",
+                                              8001 if plat == "tuxun" else 8002))
+            mirror_url = f"http://127.0.0.1:{mirror_port}/"
+            if plat == "geoguessr":
+                mirror_url += "login"
             self.window.load_url(url)
             deadline = time.time() + 300
+            stall_deadline = time.time() + 12   # 白屏检测：12 秒仍未加载完就提供镜像入口
+            use_mirror = False
+            banner_shown = False
             while time.time() < deadline and self._login_busy:
                 time.sleep(2)
                 try:
                     cookies = self.window.get_cookies()
                 except Exception:
-                    continue
-                self._inject_login_back_button()
+                    cookies = None
                 header = _cookies_header_for(cookies, plat)
+                if not header and self._mirror_login_header.get(plat):
+                    # 镜像通道已捕获（网页登录/镜像加载页登录），直接采用
+                    header = self._mirror_login_header[plat]
                 if header:
                     try:
                         upsert_env_line(key, header)
@@ -1711,11 +1809,19 @@ class TuxunApp:
                         message = f"Cookie 写入失败: {exc}"
                         logger.error("%s", message)
                     break
+                if not use_mirror:
+                    if not banner_shown and time.time() > stall_deadline:
+                        banner_shown = self._inject_mirror_fallback_banner()
+                    if self._login_use_mirror:
+                        use_mirror = True
+                        banner_shown = True
+                        self.window.load_url(mirror_url)
         except Exception as exc:  # noqa: BLE001
             message = f"登录窗口异常: {exc}"
             logger.error("%s", message)
         finally:
             self._login_busy = False
+            self._login_use_mirror = False
             try:
                 self.window.load_html(self.build_html())
                 self.window.evaluate_js(
@@ -1724,6 +1830,27 @@ class TuxunApp:
             except Exception:
                 pass
             print(f"[登录] {message}")
+
+    def _inject_mirror_fallback_banner(self) -> bool:
+        """官网加载疑似白屏时，注入「改用镜像加载」浮动按钮（尽力而为）。"""
+        try:
+            self.window.evaluate_js(
+                "(function(){if(window.__TX_MIRROR_FB)return;window.__TX_MIRROR_FB=1;"
+                "if(!document.body)return;var b=document.createElement('div');"
+                "b.innerText='页面空白？点此改用本地镜像加载（同样自动录入Cookie）';"
+                "b.style.cssText='position:fixed;top:10px;left:50%;transform:translateX(-50%);"
+                "z-index:2147483647;background:#1b2438;color:#ffd700;border:1px solid #33456e;"
+                "border-radius:6px;padding:8px 14px;cursor:pointer;font:13px Microsoft YaHei';"
+                "b.onclick=function(){if(window.pywebview&&pywebview.api)pywebview.api.login_use_mirror();};"
+                "document.body.appendChild(b);})()")
+            return True
+        except Exception:
+            return False
+
+    def login_use_mirror(self) -> dict:
+        """（登录窗口内浮动按钮）官网白屏时改用本地镜像加载登录页。"""
+        self._login_use_mirror = True
+        return {"status": "success", "message": "正在切换到镜像加载…"}
 
     def _inject_login_back_button(self) -> None:
         """在官网登录页右上角注入「返回助手」浮动按钮（尽力而为，失败不影响登录）。"""
@@ -2334,7 +2461,7 @@ def print_banner(app: TuxunApp, auto_proxy: bool, mirror_on: bool = False) -> No
         mport = int(app.config.get("mirror_port", 8001))
         gport = int(app.config.get("mirror_port_geo", 8002))
         print(f"  图寻镜像: http://127.0.0.1:{mport}（免证书，浏览器直接访问做题）")
-        print(f"  Geo镜像: http://127.0.0.1:{gport}（需 .env 配置 GEOGUESSR_COOKIE）")
+        print(f"  Geo镜像: http://127.0.0.1:{gport}（未登录也可进，页面内登录自动录入）")
     print("  平台识别: 按请求来源自动标注 图寻 / GeoGuessr")
     print("  证书: 首次使用请安装（--install-cert / 见 README）")
     print("=" * 56)
@@ -2463,10 +2590,6 @@ def main() -> None:
     logger.info("========== 实时取点模式启动 ==========")
     logger.info("Python %s | %s | 日志文件: %s", sys.version.split()[0], sys.platform, log_file)
 
-    cookies = {
-        "tuxun": os.getenv("TUXUN_COOKIE", "").strip(),
-        "geoguessr": os.getenv("GEOGUESSR_COOKIE", "").strip(),
-    }
     mirror_on = bool(args.mirror or config.get("mirror_enabled"))
 
     # ---- 互斥锁：端口占用检查（多开会冲突/互相写配置）----
@@ -2474,8 +2597,7 @@ def main() -> None:
                     int(config.get("control_port", 18080)): "控制API/选择页"}
     if mirror_on:
         wanted_ports[int(config.get("mirror_port", 8001))] = "图寻镜像"
-        if cookies.get("geoguessr"):
-            wanted_ports[int(config.get("mirror_port_geo", 8002))] = "GeoGuessr 镜像"
+        wanted_ports[int(config.get("mirror_port_geo", 8002))] = "GeoGuessr 镜像"
     if not ensure_ports_free(wanted_ports):
         logger.info("因端口占用选择退出（互斥检查）。")
         return
@@ -2501,10 +2623,7 @@ def main() -> None:
     if mirror_on:
         started = []
         for kind, pkey, default in (("tuxun", "mirror_port", 8001), ("geoguessr", "mirror_port_geo", 8002)):
-            if kind == "geoguessr" and not cookies.get("geoguessr"):
-                logger.info("GeoGuessr 镜像跳过：未配置 GEOGUESSR_COOKIE"
-                            "（可运行 --login geoguessr，或在图形界面点「登录Geo」自动获取）。")
-                continue
+            # 未登录也启动镜像：全网页端登录就发生在镜像页里（登录 Cookie 会被自动捕获）
             port_k = int(config.get(f"mirror_port_{kind}", default)) if kind == "geoguessr" else int(config.get("mirror_port", default))
             start_mirror_server(app, kind, port_k, int(config.get("control_port", 18080)), mirrors)
             if port_listening("127.0.0.1", port_k):
