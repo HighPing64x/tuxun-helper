@@ -30,7 +30,8 @@
 
   /* ================= 主页选择页 ================= */
   .home-only { transition: opacity .45s ease, filter .45s ease; }
-  body.viewing .home-only { opacity: 0; pointer-events: none; filter: blur(6px); }
+  /* !important：压过 .side 的悬停暗化规则（body.side-hover-* .side.x 特异性更高） */
+  body.viewing .home-only { opacity: 0 !important; pointer-events: none !important; filter: blur(6px) !important; }
   #ray-v {
     position: fixed; left: 50%; top: 0; width: 1px; height: 100%;
     background: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.75) 30%,
@@ -171,6 +172,17 @@
   .login-card { background: #10101a; border: 1px solid #232a44; border-radius: 14px; padding: 22px; }
   .login-card h3 { color: #fff; font-weight: 500; margin-bottom: 8px; font-size: 16px; }
   .login-card p { color: #7a7a90; font-size: 12px; line-height: 1.8; margin-bottom: 14px; }
+  #login-choice { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.72); padding: 20px; }
+  #login-choice.show { display: flex; }
+  #login-choice .box { width: min(520px, 100%); background: #10101a; border: 1px solid #3a4264;
+    border-radius: 12px; padding: 24px; box-shadow: 0 18px 60px rgba(0,0,0,.65); }
+  #login-choice h3 { color: #fff; font-size: 18px; font-weight: 500; margin-bottom: 8px; }
+  #login-choice p { color: #8e92aa; font-size: 12px; line-height: 1.7; margin-bottom: 16px; }
+  #manual-cookie { width: 100%; min-height: 78px; resize: vertical; background: #0b0e18; color: #cfe3ff;
+    border: 1px solid #2a3350; border-radius: 6px; padding: 9px; font: 12px Consolas, monospace; }
+  #login-choice .choice-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  #login-choice .close { float: right; background: none; border: 0; color: #8e92aa; cursor: pointer; font-size: 18px; }
 
   /* 教程 */
   #md { background: #10101a; border: 1px solid #232a44; border-radius: 12px; padding: 24px 28px;
@@ -278,17 +290,17 @@
     <section id="v-login" hidden>
       <h2>平台登录</h2>
       <p style="font-size:12px;color:#7a7a90;margin-bottom:14px">
-        登录在本地镜像页里完成（微信扫码/邮箱），Cookie 全程自动录入到本机 .env，不需要手动复制。</p>
+        可访问平台官网自动拦截 Cookie，也可直接手动录入 Cookie。</p>
       <div class="login-cards">
         <div class="login-card">
           <h3>图寻 <span class="badge" id="ck-tuxun">检测中</span></h3>
-          <p>进入本地镜像页（127.0.0.1:8001），点击页面右上角登录，用微信扫码确认。登录成功瞬间 Cookie 自动录入并即时生效。</p>
-          <button class="act go" onclick="webLogin('tuxun')">去镜像页登录</button>
+          <p>可访问官网并由本工具自动拦截 Cookie，也可直接粘贴 Cookie 手动录入。</p>
+          <button class="act go" onclick="choosePlatform('tuxun')">选择登录方式</button>
         </div>
         <div class="login-card">
           <h3>GeoGuessr <span class="badge" id="ck-geo">检测中</span></h3>
-          <p>进入本地镜像页（127.0.0.1:8002/login），用邮箱登录最稳（Google 登录需系统代理）。登录成功后 Cookie 自动录入。</p>
-          <button class="act go" onclick="webLogin('geoguessr')">去镜像页登录</button>
+          <p>可访问官网并由本工具自动拦截 Cookie，也可直接粘贴 Cookie 手动录入。</p>
+          <button class="act go" onclick="choosePlatform('geoguessr')">选择登录方式</button>
         </div>
       </div>
     </section>
@@ -310,6 +322,23 @@
     <button class="dk" data-v="tutorial" onclick="go('tutorial')">教程</button>
   </div>
 
+  <div id="login-choice" onclick="if(event.target === this) closeLoginChoice()">
+    <div class="box">
+      <button class="close" onclick="closeLoginChoice()">×</button>
+      <h3 id="login-choice-title">平台登录</h3>
+      <p>方式一会开启本地代理并打开平台官网，登录后的 Cookie 自动写入本机。方式二不访问官网，直接录入已有 Cookie。</p>
+      <div class="choice-row">
+        <button class="act go" onclick="officialLogin()">访问官网并自动拦截</button>
+        <button class="act" onclick="showManualCookie()">手动输入 Cookie</button>
+      </div>
+      <div id="manual-cookie-area" hidden>
+        <p style="margin-top:18px;margin-bottom:6px">粘贴包含 `fun_ticket=` 或 `session=` 的完整 Cookie：</p>
+        <textarea id="manual-cookie" spellcheck="false" placeholder="fun_ticket=... 或 session=..."></textarea>
+        <div class="choice-row"><button class="act go" onclick="saveManualCookie()">保存并登录</button></div>
+      </div>
+    </div>
+  </div>
+
 <script src="/vendor/leaflet.js"></script>
 <script>
 /* ================= 全局状态 ================= */
@@ -317,6 +346,7 @@ var ST = null;             // /state 最新数据
 var SETTINGS = null;       // /settings 快照
 var POINTS = [];           // /points
 var VIEW = 'home';
+var LOGIN_PLATFORM = '';
 var map = null, tileLayer = null, markersLayer = null;
 var SETTINGS_META = [
   ['anti_decoy', '防诱饵', 'bool', '自动排除街景元数据里的假坐标'],
@@ -331,6 +361,9 @@ var SETTINGS_META = [
   ['oneclock_key', '一键热键', 'text', '游戏页面获得焦点时按下生效，如 F9'],
   ['map_size', '计分地图尺寸(km)', 'num', '0=自动（中国≈6120/世界≈14916）'],
   ['map_tiles', '地图瓦片源', ['osm', 'amap', 'arcgis'], '网页地图瓦片源（OSM 走本地代理）'],
+  ['amap_key', '高德 Web服务 Key', 'text', '国内坐标逆地理编码用，留空用内置默认'],
+  ['amap_js_key', '高德 JS Key', 'text', '预留（高德地图 JS API）'],
+  ['overlay_enabled', '游戏页悬浮窗', 'bool', '是否在游戏镜像页注入图寻助手悬浮窗'],
   ['mirror_enabled', '启动时开启镜像', 'bool', '关掉后仅拦截模式可用（不推荐）'],
   ['open_index', '启动打开网页', 'bool', '启动后自动打开本页面'],
   ['log_history', '记录 history.jsonl', 'bool', '捕获点落盘记录'],
@@ -343,6 +376,7 @@ var SETTINGS_META = [
 /* ================= 路由 ================= */
 function go(v) {
   VIEW = v;
+  document.body.classList.remove('side-hover-left', 'side-hover-right');
   document.body.classList.toggle('viewing', v !== 'home');
   document.querySelectorAll('#dock .dk').forEach(function (b) {
     b.classList.toggle('on', b.dataset.v === v);
@@ -382,7 +416,7 @@ function renderDash(st) {
   var f = function (p) { return p ? (+p.lat).toFixed(5) + ', ' + (+p.lng).toFixed(5) : '—'; };
   var cards = [
     ['原点', f(st.origin), 'gold'], ['目前', f(st.current), 'green'], ['答案', f(st.answer), 'blue'],
-    ['诱饵', st.decoys, 'red'], ['候选', st.candidates, 'orange'],
+    ['干扰', st.decoys, 'red'], ['候选', st.candidates, 'orange'],
     ['回合模式', st.round_move === true ? '可移动' : (st.round_move === false ? '无移动' : '—'), ''],
   ];
   document.getElementById('dash-cards').innerHTML = cards.map(function (c) {
@@ -416,9 +450,25 @@ function cookieAns(accept) {
     .then(function (r) { return r.json(); })
     .then(function (j) { alert(j.message || 'done'); refresh(); });
 }
-function webLogin(plat) {
-  fetch('/login/' + plat, { method: 'POST' }).then(function (r) { return r.json(); })
-    .then(function (j) { if (j.url) location.href = j.url; });
+function choosePlatform(plat) {
+  LOGIN_PLATFORM = plat;
+  document.getElementById('login-choice-title').innerText = plat === 'tuxun' ? '图寻登录' : 'GeoGuessr 登录';
+  document.getElementById('manual-cookie-area').hidden = true;
+  document.getElementById('manual-cookie').value = '';
+  document.getElementById('login-choice').classList.add('show');
+}
+function closeLoginChoice() { document.getElementById('login-choice').classList.remove('show'); }
+function showManualCookie() { document.getElementById('manual-cookie-area').hidden = false; }
+function officialLogin() {
+  fetch('/official-login/' + LOGIN_PLATFORM, { method: 'POST' }).then(function (r) { return r.json(); })
+    .then(function (j) { if (j.status === 'success' && j.url) location.href = j.url; else alert(j.message || '启动官网登录失败'); });
+}
+function saveManualCookie() {
+  var cookie = document.getElementById('manual-cookie').value.trim();
+  fetch('/manual-cookie', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platform: LOGIN_PLATFORM, cookie: cookie }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { alert(j.message || ''); if (j.status === 'success') { closeLoginChoice(); refresh(); } });
 }
 
 /* ================= 捕获点列表 ================= */
@@ -430,7 +480,7 @@ function refreshPoints() {
     tb.innerHTML = POINTS.slice().reverse().map(function (p, idx) {
       var t = p.time ? String(p.time).slice(5) : '';
       var kind = p.kind || 'main';
-      var kn = { main: '原点', decoy: '诱饵', candidate: '候选', moved: '目前', answer: '答案' }[kind] || kind;
+      var kn = { main: '原点', decoy: '干扰', candidate: '候选', moved: '目前', answer: '答案' }[kind] || kind;
       var dist = p.from_origin_m != null ? Math.round(p.from_origin_m) + ' m' : '';
       return '<tr onclick="showOnMap(' + (POINTS.length - 1 - idx) + ')"><td>' + t + '</td><td>' +
         '<span class="kind ' + kind + '">' + kn + '</span></td><td>' +
@@ -474,7 +524,7 @@ function drawMapOverlays(st) {
   POINTS.forEach(function (p) {
     if (!p.lat || !p.lng) return;
     var c = p.kind === 'decoy' ? '#d97a7a' : (p.kind === 'candidate' ? '#f0a35e' : null);
-    if (c) addDot(p, c, p.kind === 'decoy' ? '诱饵' : '候选', false);
+    if (c) addDot(p, c, p.kind === 'decoy' ? '干扰' : '候选', false);
     latest = (p.kind === 'main' || p.kind === 'moved') ? p : latest;
   });
 }
@@ -598,12 +648,10 @@ document.getElementById('side-tuxun').addEventListener('mouseenter', function ()
 document.getElementById('side-geo').addEventListener('mouseenter', function () {
   document.body.classList.add('side-hover-right'); document.body.classList.remove('side-hover-left'); });
 document.getElementById('side-tuxun').addEventListener('click', function () {
-  if (ST && ST.mirrors && ST.mirrors.tuxun) location.href = 'http://127.0.0.1:' + ST.mirrors.tuxun + '/';
-  else go('login');
+  choosePlatform('tuxun');
 });
 document.getElementById('side-geo').addEventListener('click', function () {
-  if (ST && ST.mirrors && ST.mirrors.geoguessr) location.href = 'http://127.0.0.1:' + ST.mirrors.geoguessr + '/';
-  else go('login');
+  choosePlatform('geoguessr');
 });
 var dot = document.getElementById('dot'), ringTimer = null;
 dot.addEventListener('mouseenter', function () {

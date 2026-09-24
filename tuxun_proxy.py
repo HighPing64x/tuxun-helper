@@ -105,7 +105,7 @@ DEFAULT_CONFIG = {
     "proxy_port": 8080,       # 本地代理端口
     "display_delay": 0.4,     # 捕获到坐标后的显示延迟（秒），缓解瞬间跳图
     "map_zoom": 5,            # 地图初始缩放级别
-    "map_tiles": "osm",       # 瓦片源: osm（经本地代理转发，合规 UA+缓存）/ amap / arcgis
+    "map_tiles": "amap",      # 瓦片源: osm（经本地代理转发，合规 UA+缓存）/ amap / arcgis；国内默认高德
     "amap_key": DEFAULT_AMAP_KEY,     # 高德 Web服务 Key（已内置默认，可在 config.json 覆盖）
     "amap_js_key": DEFAULT_AMAP_JS_KEY,  # 高德 JS Key（预留）
     "log_history": True,      # 是否把捕获点写入 history.jsonl
@@ -116,7 +116,7 @@ DEFAULT_CONFIG = {
     "mirror_port": 8001,      # 图寻镜像端口（--mirror 开启：免证书免系统代理，浏览器访问 127.0.0.1:端口）
     "control_port": 18080,    # 镜像悬浮窗的状态/设置 API 端口
     "mirror_enabled": True,   # 启动时自动开启镜像（2.0 起默认开：网页登录/做题都走镜像）
-    "api_poll": False,        # API 直读：轮询 solo/get 获取真实坐标（绕过街景元数据诱饵），默认关
+    "api_poll": True,         # API 直读：解析浏览器自身 solo/get 响应取真实坐标（被动、零额外请求），默认开（镜像模式无系统代理也能出答案）
     "ai_auto": False,         # AI 自动分析：新回合自动抓图分析并自动对答案（需 .env 配 AI Key）
     "cookie_declined": {"tuxun": False, "geoguessr": False},  # 自动录入 Cookie 的“否”记忆
     "name_protect": {         # NameProtect：DOM 级替换页面上显示的昵称/ID（默认关）
@@ -127,6 +127,7 @@ DEFAULT_CONFIG = {
     "oneclock_score": 3500,     # 一键目标分数（5000 满）
     "oneclock_key": "F9",       # 一键热键（游戏页面获得焦点时按下生效）
     "map_size": 0,              # 计分地图尺寸(km)：0=按回合自动（中国≈6120 / 世界≈14916）
+    "overlay_enabled": True,    # 游戏镜像页是否注入图寻助手悬浮窗（关掉则不注入，页面干净）
     "open_index": True,         # 启动后自动打开选择页（http://127.0.0.1:控制端口/）
 }
 
@@ -480,7 +481,8 @@ _OVERLAY_SCRIPT = """(function(){
   if (window.__TUXUN_OVERLAY__) return; window.__TUXUN_OVERLAY__ = 1;
   var API = 'http://127.0.0.1:__CONTROL_PORT__';
   var st = { origin: null, current: null, answer: null, decoys: 0, candidates: 0, round_move: null,
-             settings: { anti_decoy: true, near_m: 150, display_delay: 0.4, api_poll: false, ai_auto: false,
+             origin_addr: '', current_addr: '', answer_addr: '',
+             settings: { anti_decoy: true, near_m: 150, display_delay: 0.4, api_poll: true, ai_auto: false,
                          oneclock_enabled: false, oneclock_score: 3500, oneclock_key: 'F9', map_size: 0 } };
   var BTN = 'background:#1a1a2e;border:1px solid #2a3350;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:11px;color:';
   var panel = document.createElement('div');
@@ -489,9 +491,12 @@ _OVERLAY_SCRIPT = """(function(){
     '<div id="tx-head" style="cursor:move;color:#FFD700;font-weight:bold;user-select:none">📍 图寻助手 <span id="tx-fold" style="float:right;color:#55627e;cursor:pointer">[收起]</span></div>' +
     '<div id="tx-body">' +
     '<div>原点: <span id="tx-o" style="color:#FFD700;font-family:Consolas,monospace">-</span></div>' +
+    '<div id="tx-oa" style="color:#8fa3c2;font-size:11px;margin:0 0 4px 2.6em;word-break:break-all"></div>' +
     '<div>目前: <span id="tx-c" style="color:#69db7c;font-family:Consolas,monospace">-</span> <span id="tx-cd" style="color:#8fa3c2"></span></div>' +
+    '<div id="tx-ca" style="color:#8fa3c2;font-size:11px;margin:0 0 4px 2.6em;word-break:break-all"></div>' +
     '<div>答案: <span id="tx-a" style="color:#4FC3F7;font-family:Consolas,monospace">-</span></div>' +
-    '<div style="color:#8fa3c2">诱饵 <b id="tx-d" style="color:#d97a7a">0</b> · 候选 <b id="tx-cd2" style="color:#f0a35e">0</b> · 模式 <span id="tx-mv">-</span></div>' +
+    '<div id="tx-aa" style="color:#8fa3c2;font-size:11px;margin:0 0 4px 2.6em;word-break:break-all"></div>' +
+    '<div style="color:#8fa3c2">干扰 <b id="tx-d" style="color:#d97a7a">0</b> · 候选 <b id="tx-cd2" style="color:#f0a35e">0</b> · 模式 <span id="tx-mv">-</span></div>' +
     '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
     '<button id="tx-set" style="' + BTN + '#FFD700">⚙ 设置</button>' +
     '<button id="tx-copy" style="' + BTN + '#00E5FF">复制原点</button>' +
@@ -511,6 +516,9 @@ _OVERLAY_SCRIPT = """(function(){
     '<label style="cursor:pointer"><input type="checkbox" id="tx-oc"> 启用</label>' +
     '<div style="margin-top:4px">目标分数 <input id="tx-ocs" type="number" step="50" min="200" max="4990" style="width:64px;background:#0b0e18;color:#cfe3ff;border:1px solid #2a3350;border-radius:3px;padding:0 4px"> · 热键 <input id="tx-ock" readonly placeholder="点击录入" style="width:74px;background:#0b0e18;color:#FFD700;border:1px solid #2a3350;border-radius:3px;padding:0 4px;cursor:pointer"></div>' +
     '<div id="tx-ocinfo" style="color:#55627e;font-size:11px;margin-top:2px">在游戏中按热键 = 以该分数对应的距离自动落点提交</div>' +
+    '<div style="color:#8fa3c2;margin:6px 0 4px">— 手机号区号解析 —</div>' +
+    '<input id="tx-phone" placeholder="粘贴手机号，自动识别国家/地区与运营商" style="width:100%;background:#0b0e18;color:#cfe3ff;border:1px solid #2a3350;border-radius:3px;padding:3px 6px;font-size:11px">' +
+    '<div id="tx-phr" style="color:#69db7c;font-size:11px;margin-top:3px;word-break:break-all"></div>' +
     '</div></div>';
   function mount(){ document.body.appendChild(panel); }
   if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
@@ -520,10 +528,13 @@ _OVERLAY_SCRIPT = """(function(){
   function render(){
     var o = document.getElementById('tx-o'); if (!o) return;
     o.innerText = fmt(st.origin);
+    document.getElementById('tx-oa').innerText = st.origin_addr || '';
     document.getElementById('tx-c').innerText = fmt(st.current);
     document.getElementById('tx-cd').innerText = (st.current && st.current.from_origin_m != null)
       ? '(' + Math.round(st.current.from_origin_m) + ' m)' : '';
+    document.getElementById('tx-ca').innerText = st.current_addr || '';
     document.getElementById('tx-a').innerText = fmt(st.answer);
+    document.getElementById('tx-aa').innerText = st.answer_addr || '';
     document.getElementById('tx-d').innerText = st.decoys;
     document.getElementById('tx-cd2').innerText = st.candidates;
     document.getElementById('tx-mv').innerText = st.round_move === true ? '可移动' : (st.round_move === false ? '无移动' : '-');
@@ -542,7 +553,7 @@ _OVERLAY_SCRIPT = """(function(){
       : '等待捕获本回合真值（API直读/答案揭示后可用）';
   }
   function poll(){
-    fetch(API + '/state').then(function(r){ return r.json(); }).then(function(j){ st = j; render(); }).catch(function(){});
+    fetch(API + '/state').then(function(r){ return r.json(); }).then(function(j){ st = j; render(); syncMapMarks(); }).catch(function(){});
   }
   function save(extra){
     var body = {};
@@ -627,14 +638,83 @@ _OVERLAY_SCRIPT = """(function(){
     var size = +s.map_size || 0;
     if (!size) size = (coord === 'gcj02' || coord === 'bd09') ? 6120 : 14916;  // 中国图 / 世界图
     var d = distForScore(s.oneclock_score, size);
-    var guess = destPoint(st.origin.lat, st.origin.lng, d, Math.random() * 360);
+    var guess = pickLandPoint(st.origin.lat, st.origin.lng, d);
     var ok1 = wsSend({ scope: 'tuxun', data: { type: 'pin', lat: guess.lat, lng: guess.lng } });
     var ok2 = wsSend({ scope: 'tuxun', data: { type: 'confirm', lat: guess.lat, lng: guess.lng } });
     tipMsg(ok1 && ok2
       ? '一键落点 ' + Math.round(d) + ' km ≈ ' + s.oneclock_score + ' 分（' + fmt(guess) + '）'
       : '一键落点失败：未捕获游戏 ws 连接（需先进入对局）');
   }
+  /* 用内置海陆掩膜（0.5° 网格）挑一个落在陆地上的落点：黄金角遍历方位，避免随机点掉进海里 */
+  function pickLandPoint(lat, lng, d) {
+    var lm = window.__LAND_MASK__;
+    var usable = lm && lm.ready && lm.data;
+    if (!usable || !(d > 0)) return destPoint(lat, lng, d, Math.random() * 360);
+    var rows = 360, cols = 720;
+    var a0 = Math.random() * 360;
+    function landAt(lat2, lng2) {
+      var row = Math.max(0, Math.min(rows - 1, Math.round((90 - lat2) * 2)));
+      var col = Math.max(0, Math.min(cols - 1, Math.round((lng2 + 180) * 2)));
+      return lm.data[row * cols + col] === 1;
+    }
+    for (var i = 0; i < 24; i++) {  // 黄金角 137.508°：方位均匀散布，不扎堆同一片海
+      var p = destPoint(lat, lng, d, (a0 + i * 137.508) % 360);
+      if (landAt(p.lat, p.lng)) return p;
+    }
+    for (var j = 0; j < 24; j++) {  // 兜底：缩到 60% 距离再试，靠岸概率更高
+      var p2 = destPoint(lat, lng, d * 0.6, (a0 + j * 137.508) % 360);
+      if (landAt(p2.lat, p2.lng)) return p2;
+    }
+    return destPoint(lat, lng, d, Math.random() * 360);  // 极端兜底：仍返回原逻辑
+  }
   function tipMsg(t){ var tip = document.getElementById('tx-tip'); if (tip) { tip.innerText = t; setTimeout(function(){ tip.innerText=''; }, 3000); } }
+
+  /* ================= 手机号区号解析 ================= */
+  var CC = [["1","北美(美国/加拿大)"],["7","俄罗斯/哈萨克斯坦"],["20","埃及"],["27","南非"],["30","希腊"],["31","荷兰"],["32","比利时"],["33","法国"],["34","西班牙"],["36","匈牙利"],["39","意大利"],["40","罗马尼亚"],["41","瑞士"],["43","奥地利"],["44","英国"],["45","丹麦"],["46","瑞典"],["47","挪威"],["48","波兰"],["49","德国"],["51","秘鲁"],["52","墨西哥"],["53","古巴"],["54","阿根廷"],["55","巴西"],["56","智利"],["57","哥伦比亚"],["58","委内瑞拉"],["60","马来西亚"],["61","澳大利亚"],["62","印尼"],["63","菲律宾"],["64","新西兰"],["65","新加坡"],["66","泰国"],["81","日本"],["82","韩国"],["84","越南"],["86","中国"],["90","土耳其"],["91","印度"],["92","巴基斯坦"],["93","阿富汗"],["94","斯里兰卡"],["95","缅甸"],["98","伊朗"],["212","摩洛哥"],["213","阿尔及利亚"],["216","突尼斯"],["218","利比亚"],["220","冈比亚"],["221","塞内加尔"],["225","科特迪瓦"],["226","布基纳法索"],["230","毛里求斯"],["233","加纳"],["234","尼日利亚"],["254","肯尼亚"],["255","坦桑尼亚"],["256","乌干达"],["263","津巴布韦"],["351","葡萄牙"],["352","卢森堡"],["353","爱尔兰"],["354","冰岛"],["355","阿尔巴尼亚"],["358","芬兰"],["359","保加利亚"],["370","立陶宛"],["371","拉脱维亚"],["372","爱沙尼亚"],["373","摩尔多瓦"],["374","亚美尼亚"],["375","白俄罗斯"],["376","安道尔"],["380","乌克兰"],["381","塞尔维亚"],["385","克罗地亚"],["386","斯洛文尼亚"],["387","波黑"],["389","北马其顿"],["420","捷克"],["421","斯洛伐克"],["423","列支敦士登"],["852","中国香港"],["853","中国澳门"],["855","柬埔寨"],["856","老挝"],["880","孟加拉国"],["886","中国台湾"],["961","黎巴嫩"],["962","约旦"],["963","叙利亚"],["964","伊拉克"],["965","科威特"],["966","沙特阿拉伯"],["967","也门"],["968","阿曼"],["971","阿联酋"],["972","以色列"],["973","巴林"],["974","卡塔尔"],["975","不丹"],["976","蒙古"],["977","尼泊尔"],["992","塔吉克斯坦"],["993","土库曼斯坦"],["994","阿塞拜疆"],["995","格鲁吉亚"],["996","吉尔吉斯斯坦"],["998","乌兹别克斯坦"]];
+  var phoneTimer = null;
+  function parsePhone(raw){
+    var d = String(raw || '').replace(/[^\d]/g, '');
+    if (d.indexOf('00') === 0) d = d.slice(2);
+    if (!d) return '请输入手机号';
+    if (d.length === 11 && d.charAt(0) === '1') {
+      // 中国手机号：第 4~7 位是地区编码（连同前 3 位 = 前 7 位号段），自动解析为省市
+      if (phoneTimer) clearTimeout(phoneTimer);
+      phoneTimer = setTimeout(function(){
+        fetch(API + '/phone-cc?num=' + d).then(function(r){ return r.json(); }).then(function(j){
+          var out = document.getElementById('tx-phr');
+          if (!out) return;
+          if (j && j.ok) {
+            var where = j.province + (j.city && j.city !== j.province ? ' ' + j.city : '');
+            out.innerText = '中国 · ' + where + '（号段 ' + j.cc + '）';
+          } else {
+            out.innerText = (j && j.msg) ? j.msg : '归属地解析失败';
+          }
+        }).catch(function(){
+          var out = document.getElementById('tx-phr');
+          if (out) out.innerText = '归属地解析失败（控制服务不可达）';
+        });
+      }, 120);
+      return '解析中…';
+    }
+    // 非中国号码：国际区号兜底
+    var cc = '';
+    for (var l = 3; l >= 1; l--) {
+      var p = d.slice(0, l);
+      for (var i = 0; i < CC.length; i++) { if (CC[i][0] === p) { cc = CC[i]; break; } }
+      if (cc) break;
+    }
+    if (!cc) return '未知区号（号码: +' + d.slice(0, 6) + '…）';
+    var out2 = [cc[1] + ' +' + cc[0]];
+    var rest = d.slice(cc[0].length);
+    if (rest) out2.push('尾号 ' + (rest.length > 4 ? '…' + rest.slice(-4) : rest));
+    return out2.join(' · ');
+  }
+  document.addEventListener('input', function(e){
+    if (e.target && e.target.id === 'tx-phone') {
+      var r = document.getElementById('tx-phr');
+      if (r) r.innerText = parsePhone(e.target.value);
+    }
+  });
 
   document.addEventListener('click', function(e){
     if (e.target.id === 'tx-fold') {
@@ -664,8 +744,117 @@ _OVERLAY_SCRIPT = """(function(){
       panel.style.top = (oy + e.clientY - sy) + 'px'; });
     document.addEventListener('mouseup', function(){ on = false; });
     document.addEventListener('DOMContentLoaded', function(){ var h=document.getElementById('tx-head');
-      if (h) h.addEventListener('mousedown', function(e){ on=true; sx=e.clientX; sy=e.clientY; e.preventDefault(); }); });
+      if (h) h.addEventListener('mousedown', function(e){
+        on=true; sx=e.clientX; sy=e.clientY;
+        // 以面板当前实际坐标为基点，避免每次拖动都从固定 (12,12) 起算导致跳位
+        ox = panel.offsetLeft; oy = panel.offsetTop;
+        e.preventDefault(); }); });
   })();
+  /* ================= 游戏内地图标记（原点=金「原」 / 答案=蓝「答」） =================
+   * 原理：只在悬浮窗里显示坐标不够直观，把真值点直接标到游戏地图上。
+   * 地图实例可能是三种形态，统一兼容：
+   *   1) 带 addMarker 的包装器（如华为 MapLibre 封装）→ 直接 addMarker
+   *   2) 标准 MapLibre/Mapbox Map（getCenter+project，无 addMarker）→ 用全局 Marker 类
+   *   3) 只有 project() 的任意地图对象 → 自维护 DOM 标记 + 监听 move 重投影 */
+  var txMap = null, txMarks = { origin: null, answer: null };
+  function txIsMapObj(o){
+    return !!o && typeof o === 'object' &&
+      (typeof o.addMarker === 'function' ||
+       (typeof o.getCenter === 'function' && typeof o.project === 'function'));
+  }
+  function txFindMap(){
+    if (txMap && txIsMapObj(txMap)) return txMap;
+    txMap = null;
+    if (window.map && txIsMapObj(window.map)) { txMap = window.map; return txMap; }
+    var el = document.querySelector('.maplibregl-canvas, .maplibregl-map, .mapboxgl-canvas, .mapboxgl-map');
+    if (!el) return null;
+    var key = null;
+    for (var k in el) { if (k.indexOf('__reactFiber$') === 0) { key = k; break; } }
+    if (!key) return null;
+    var seen = {}, q = [el[key]], guard = 0;
+    while (q.length && guard++ < 6000) {
+      var f = q.shift(); if (!f || seen[f]) continue; seen[f] = 1;
+      var s = f.stateNode;
+      if (s && txIsMapObj(s)) { txMap = s; return txMap; }
+      if (f.return) q.push(f.return);
+      if (f.child) q.push(f.child);
+      for (var c = f.sibling; c; c = c.sibling) q.push(c);
+    }
+    return null;
+  }
+  function txMarkNode(color, label){
+    var root = document.createElement('div');
+    root.style.cssText = 'width:0;height:0;pointer-events:none;z-index:9998';
+    var pin = document.createElement('div');
+    pin.style.cssText = 'position:absolute;left:-12px;top:-12px;width:24px;height:24px;border-radius:50%;' +
+      'background:' + color + ';border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.6);box-sizing:border-box;' +
+      'color:#fff;font:700 12px/20px sans-serif;text-align:center';
+    pin.innerText = label;
+    root.appendChild(pin);
+    return root;
+  }
+  function txReproject(){
+    var map = txFindMap(); if (!map || typeof map.project !== 'function') return;
+    for (var k in txMarks) {
+      var m = txMarks[k];
+      if (!m || !m._txLngLat) continue;
+      try {
+        var p = map.project([m._txLngLat[1], m._txLngLat[0]]);
+        if (p && typeof p.x === 'number') {
+          m._txNode.style.transform = 'translate(' + p.x + 'px,' + p.y + 'px)';
+        }
+      } catch (err) {}
+    }
+  }
+  function txSetMark(key, lat, lng){
+    var map = txFindMap(); if (!map) return;
+    var color = key === 'origin' ? '#FFD700' : '#4FC3F7';
+    var label = key === 'origin' ? '原' : '答';
+    if (txMarks[key]) {
+      try {
+        var el0 = txMarks[key].getElement ? txMarks[key].getElement() : null;
+        if (el0 && document.body.contains(el0)) {
+          if (typeof txMarks[key].setLngLat === 'function') { txMarks[key].setLngLat([lng, lat]); return; }
+          if (txMarks[key]._txLngLat) { txMarks[key]._txLngLat = [lng, lat]; txReproject(); return; }
+        }
+      } catch (err) {}
+      try { if (txMarks[key].remove) txMarks[key].remove(); } catch (err) {}
+      txMarks[key] = null;
+    }
+    var node = txMarkNode(color, label);
+    var mk = null;
+    try {
+      if (typeof map.addMarker === 'function') {
+        mk = map.addMarker({ element: node, lngLat: [lng, lat] });
+      } else {
+        var M = window.maplibregl || window.mapboxgl || null;
+        if (M && M.Marker) mk = new M.Marker({ element: node }).setLngLat([lng, lat]).addTo(map);
+      }
+    } catch (err) { mk = null; }
+    if (mk) { txMarks[key] = mk; return; }
+    // 兜底：project() 定位 DOM 标记（任意带 project 的地图对象可用）
+    if (typeof map.project === 'function') {
+      var host = map.getContainer ? map.getContainer() :
+                 (map.getCanvas ? map.getCanvas().parentElement : null);
+      if (!host) return;
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;z-index:9998';
+      wrap.appendChild(node);
+      host.appendChild(wrap);
+      txMarks[key] = { _txNode: wrap, _txLngLat: [lng, lat],
+        remove: function(){ try { wrap.remove(); } catch (e) {} } };
+      txReproject();
+      try { map.on('move', txReproject); map.on('moveend', txReproject); } catch (e) {}
+    }
+  }
+  function syncMapMarks(){
+    var hasMap = (window.map && txIsMapObj(window.map)) ||
+                 document.querySelector('.maplibregl-map, .maplibregl-canvas, .mapboxgl-map');
+    if (!hasMap) return;
+    if (st.origin) txSetMark('origin', +st.origin.lat, +st.origin.lng);
+    if (st.answer) txSetMark('answer', +st.answer.lat, +st.answer.lng);
+  }
+
   mount(); poll(); setInterval(poll, 1000);
 })();"""
 
@@ -809,6 +998,15 @@ class NameProtect:
 # 图寻镜像（反向代理 + 页面注入）：免证书、免系统代理的本地直连入口
 # ---------------------------------------------------------------------------
 
+# 图寻 /api 直连中继的只读范围与 UA（旁路 mitmproxy 上游 TLS 指纹 403 用）。
+# 仅 GET、路径以 /api/ 开头、排除登录链路——纯只读被动，符合反作弊红线。
+_RELAY_API_READ_ONLY = re.compile(r"^/api/")
+_RELAY_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+
+
 class MirrorRewrite:
     """反向代理响应改写（按平台配置）：
     * 上游站点的绝对地址改写到本地镜像（JS 里转义斜杠的写法一并处理）；
@@ -834,8 +1032,41 @@ class MirrorRewrite:
         self.cdn_origin = cdn_origin.rstrip("/")
         self._local = f"http://127.0.0.1:{local_port}"
         self._ws_local = f"ws://127.0.0.1:{local_port}"
+        self._relay_session = None  # 图寻 /api 直连中继的 requests 会话（懒创建）
 
     def request(self, flow: "http.HTTPFlow") -> None:
+        logger.info("[RWDBG] %s request fired: %s", self.kind, flow.request.pretty_url[:60])
+        # 本地字体内置：图寻页面 @font-face 引用 /fonts/BalooBhaina-*.woff2，
+        # 但上游 tuxun.fun 并不提供该文件（SPA 回退返回首页 HTML，浏览器字体加载落空）。
+        # 命中本地 web/fonts/ 时直接本地返回，无需改 CSS 里的 URL（相对路径本就指到本镜像）。
+        if flow.request.path.startswith("/fonts/"):
+            fname = flow.request.path[len("/fonts/"):].split("?")[0]
+            if fname and "/" not in fname:
+                data = _read_web_asset("fonts/" + fname)
+                if data:
+                    ctype = ("font/woff2" if fname.endswith(".woff2") else
+                             "application/font-woff" if fname.endswith(".woff") else
+                             "application/octet-stream")
+                    flow.response = http.Response.make(
+                        200, data, {"Content-Type": ctype,
+                                    "Cache-Control": "public, max-age=86400"})
+                    return
+        # 图寻 /api 用普通 requests 直连中继（旁路 mitmproxy 上游 TLS）。
+        # 实测根因（2026-09-24）：图寻 CDN 只放行真实浏览器/普通 HTTP 客户端 TLS，
+        # mitmproxy 上游 ClientHello 被指纹识别，凡经本镜像转发的 /api 一律 403
+        # （页面表现为『服务器走神』）；而 requests/urllib 普通 TLS 直连 /api 全 200。
+        # 这里把只读的 GET /api（排除登录链路）拦截下来，亲自用 requests 取回，再塞回 flow。
+        # 红线：只读被动——只 GET，绝不提交/灌包；非异步钩子里必须同步写 flow.response，
+        # 不能用 flow.intercept()+线程（在 request 钩子已到钩点后再拦截不会挂住 flow）。
+        if self.kind == "tuxun" and _RELAY_API_READ_ONLY.match(flow.request.path or ""):
+            # 只对真实 flow 中继（FakeFlow 单测无 client_conn，直接跳过走原逻辑）。
+            if bool(getattr(flow, "client_conn", None)):
+                _m = (getattr(flow.request, "method", "GET") or "GET").upper()
+                _p = flow.request.path or ""
+                # 只中继只读 GET 且非登录链路（登录 try / QR 必须走原镜像利 Set-Cookie 落袋）。
+                if _m == "GET" and "/login/" not in _p:
+                    self._relay_api_get(flow)
+                    return
         # 竞猜/对局请求格式记录（兼容性分析；值不含敏感信息）
         try:
             u = flow.request.pretty_url
@@ -843,7 +1074,11 @@ class MirrorRewrite:
                 logger.info("对局/上报请求: %s", u[:400])
         except Exception:
             pass
-        # CDN 资产改道（/cdn/ 前缀 -> cdn_origin）+ 上游会话注入
+        # CDN 资产改道（/cdn/ 前缀 -> cdn_origin）+ 上游会话注入。
+        # 注意：反向模式(reverse:)下 mitmproxy 已把 host 重写为上游 origin，
+        # 请求 URL 表现为 https://tuxun.fun/...，pretty_host 恒为 origin 而非 127.0.0.1。
+        # 因此不能再用 host 判断「本地流量」——本 addon 只会收到本镜像的请求，
+        # 非 /cdn/ 的直接统一注入/捕获会话 cookie。
         try:
             if self.cdn_origin and flow.request.path.startswith("/cdn/"):
                 flow.request.path = flow.request.path[len("/cdn"):]
@@ -851,12 +1086,65 @@ class MirrorRewrite:
                 flow.request.host = u.hostname
                 flow.request.scheme = u.scheme
                 flow.request.port = u.port or 443
-            elif "127.0.0.1" in flow.request.pretty_host:
+            else:
+                incoming = flow.request.headers.get("cookie", "")
+                must = "fun_ticket=" if self.kind == "tuxun" else "session="
+                if must in incoming.lower():
+                    self.jar.update(incoming)
+                    threading.Thread(target=self.app.note_mirror_login,
+                                     args=(self.kind, incoming), daemon=True).start()
                 ck = self.jar.load()
                 if ck:
                     flow.request.headers["cookie"] = ck
         except Exception as exc:
             logger.debug("镜像请求改写失败: %s", exc)
+
+    def _relay_api_get(self, flow: "http.HTTPFlow") -> None:
+        """用普通 requests 直连上游，把只读 GET /api 响应取回并填回 flow。
+
+        图寻 CDN 只放行真实浏览器/普通 HTTP 客户端 TLS，mitmproxy 上游 TLS 被指纹识别
+        （凡经镜像转发的 /api 一律 403，页面『服务器走神』）；requests 普通 TLS 直连却 200。
+        本方法在 request 钩子拦截后，亲自用 requests 取回，再塞回 flow 由镜像回给浏览器。
+        只 GET、只读、不提交，符合反作弊红线；失败以 502 回执，不影响其余镜像流量。
+        """
+        try:
+            method = (flow.request.method or "GET").upper()
+            path = flow.request.path or "/"
+            if method != "GET" or "/login/" in path:
+                flow.response = http.Response.make(
+                    405, b"relay: only readonly GET", {"Content-Type": "text/plain"})
+                return
+            cookie = self.jar.load() or ""
+            headers = {
+                "User-Agent": _RELAY_UA,
+                "Referer": self.origin + "/",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            }
+            if cookie:
+                headers["Cookie"] = cookie
+            if self._relay_session is None:
+                import requests as _requests
+
+                self._relay_session = _requests.Session()
+                self._relay_session.trust_env = False  # 图寻国内可直连，不走系统代理
+            resp = self._relay_session.get(self.origin + path, headers=headers, timeout=10)
+            hout = {}
+            for k, v in resp.headers.items():
+                if k.lower() in ("content-type", "cache-control", "location", "content-encoding"):
+                    hout[k] = v
+            if not hout.get("Content-Type"):
+                hout["Content-Type"] = "application/json; charset=utf-8"
+            flow.response = http.Response.make(resp.status_code, resp.content, hout)
+        except Exception as exc:
+            logger.warning("API 直连中继失败 %s: %s", flow.request.path[:60], exc)
+            flow.response = http.Response.make(
+                502, b"api relay failed", {"Content-Type": "text/plain"})
+        finally:
+            try:
+                flow.resume()
+            except Exception:
+                pass
 
     def _rewrite_text(self, text: str) -> str:
         # 平台前端把 API/静态资源地址硬编码在 JS/HTML 里，全部改写到本地镜像
@@ -892,7 +1180,8 @@ class MirrorRewrite:
         for v in values:
             v = _re.sub(r"Domain=[^;]+;?\s*", "", v, flags=_re.I)
             v = _re.sub(r"Secure;?\s*", "", v, flags=_re.I)
-            headers.append("set-cookie", v)
+            # mitmproxy 11 Headers 无 append 方法（AttributeError 曾导致登录 Set-Cookie 静默丢失），用 add
+            headers.add("set-cookie", v)
             first = v.split(";", 1)[0].strip()  # 只留 name=value，丢掉 Path/HttpOnly 等属性
             if "=" in first and first not in pairs:
                 pairs.append(first)
@@ -906,6 +1195,20 @@ class MirrorRewrite:
                              args=(self.kind, joined), daemon=True).start()
 
     def response(self, flow: "http.HTTPFlow") -> None:
+        status_code = getattr(flow.response, "status_code", None) if flow.response else None
+        logger.info("[RWDBG] %s response fired: %s %s", self.kind, status_code,
+                    flow.request.pretty_url[:60])
+        # 被动诊断：图寻 /api 被上游 WAF 风控 403（账号/会话黑名单，与本地 TLS/UA 无关）。
+        # 只读观察既有的 403，不新增任何请求、不注入提交，符合反作弊红线。
+        # 首次命中即打一条清晰可行动的日志，并置标志供 /state 与悬浮窗提示。
+        if self.kind == "tuxun" and status_code == 403 and "/api/" in (flow.request.path or ""):
+            if not getattr(self.app, "_tuxun_flagged", False):
+                self.app._tuxun_flagged = True
+                logger.warning(
+                    "检测到图寻 /api 被上游风控拒绝（403）：该 Cookie 的 fun_ticket 已被图寻标记，"
+                    "工具无法取真值（页面上会表现为『服务器走神』）。请在图寻官网重新登录后导出全新 Cookie，"
+                    "或更换账号；若新登录仍 403 说明账号级别的限制。"
+                )
         # 坐标/对局捕获与主拦截完全一致（反向模式下 host 仍为上游域名）
         if self.kind == "tuxun" and self.interceptor is not None:
             self.interceptor.response(flow)
@@ -929,14 +1232,20 @@ class MirrorRewrite:
             return
         try:
             text = flow.response.get_text(strict=False)
-        except Exception:
-            return
+        except Exception as exc:
+            logger.warning("镜像响应正文读取失败 (%s): %s", self.kind, exc)
+            try:
+                text = flow.response.content.decode("utf-8", errors="replace")
+            except Exception as fallback_exc:
+                logger.warning("镜像响应正文解码失败 (%s): %s", self.kind, fallback_exc)
+                return
         if not text or len(text) > 8_000_000:
             return
         text = _META_CSP_RE.sub("", text)  # 页面内嵌 meta CSP 会拦注入脚本
         new = self._rewrite_text(text)
         injected = False
-        if "text/html" in ctype and "</body>" in new.lower():
+        if "text/html" in ctype and "</body>" in new.lower() \
+                and self.app.config.get("overlay_enabled", True):
             pos = new.lower().rfind("</body>")
             injection = "<script>" + _OVERLAY_SCRIPT.replace(
                 "__CONTROL_PORT__", str(self.app.config.get("control_port", 18080))
@@ -990,6 +1299,8 @@ class MirrorCookieJar:
 
     def load(self) -> str:
         stored = os.getenv(self.env_key, "").strip()
+        if stored:
+            return stored
         if os.path.exists(self._file):
             try:
                 with open(self._file, "r", encoding="utf-8") as f:
@@ -1031,6 +1342,28 @@ def _read_web_asset(name: str) -> Optional[bytes]:
     return None
 
 
+# 中国手机号归属地（前 7 位号段 -> 省/市）：惰性加载 web/phone_cc.json.gz
+# 数据来源 xluohome/phonedata（仅供学习）；由 _gen_phone_cc.py 生成后即可删除生成脚本。
+_PHONE_CC: Optional[dict] = None
+
+
+def _phone_cc_lookup(num: str) -> Optional[dict]:
+    """查询 11 位中国手机号的前 7 位号段归属地；未内置/失败返回 None。"""
+    global _PHONE_CC
+    if _PHONE_CC is None:
+        raw = _read_web_asset("phone_cc.json.gz")
+        if not raw:
+            _PHONE_CC = {}
+        else:
+            try:
+                import gzip as _gzip
+                _PHONE_CC = json.loads(_gzip.decompress(raw).decode("utf-8"))
+            except Exception as exc:
+                logger.warning("手机号归属地数据加载失败: %s", exc)
+                _PHONE_CC = {}
+    return _PHONE_CC.get(num[:7])
+
+
 def _graceful_exit(app: "TuxunApp") -> None:
     """网页退出入口：还原系统代理后结束进程。"""
     try:
@@ -1051,6 +1384,7 @@ def _graceful_exit(app: "TuxunApp") -> None:
 _TILE_CACHE_DIR = os.path.join(BASE_DIR, "cache", "tiles")
 _TILE_UA = "TuxunHelper/1.0 (https://github.com/HighPing64x/tuxun-helper)"
 _TILE_RE = re.compile(r"^/tiles/osm/(\d{1,2})/(\d{1,4})/(\d{1,4})(?:@2x)?\.png$")
+_TILE_LAST_OK = ""   # 最近一次成功的瓦片源前缀（动态优先，避免反复等坏源超时）
 
 
 def _osm_tile_fetch(z: int, x: int, y: int, app: Optional["TuxunApp"] = None) -> Optional[bytes]:
@@ -1063,7 +1397,14 @@ def _osm_tile_fetch(z: int, x: int, y: int, app: Optional["TuxunApp"] = None) ->
             pass
     if z > 19 or x >= (1 << z) or y >= (1 << z):
         return None
-    url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    # 上游回退链：官方瓦片服务器被部分代理出口/网络重置时，自动换 FOSSGIS 镜像。
+    # 记住上次成功的源放前面，避免每次都先等坏源超时。
+    global _TILE_LAST_OK
+    preferred = _TILE_LAST_OK
+    candidates = [f"https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                  f"https://tile.openstreetmap.de/{z}/{x}/{y}.png"]
+    urls = ([c for c in candidates if preferred and c.startswith(preferred)] +
+            [c for c in candidates if not (preferred and c.startswith(preferred))])
     try:
         import requests
 
@@ -1075,10 +1416,26 @@ def _osm_tile_fetch(z: int, x: int, y: int, app: Optional["TuxunApp"] = None) ->
                     proxies = {"http": upstream, "https": upstream}
         except Exception:
             proxies = {}
-        resp = requests.get(url, headers={"User-Agent": _TILE_UA},
-                            proxies=proxies or None, timeout=10)
-        if resp.status_code != 200 or not resp.content:
-            logger.debug("OSM 瓦片 %s 返回 %s", url, resp.status_code)
+        import urllib.request as _ur
+
+        if not proxies:
+            sys_proxies = _ur.getproxies()
+            if sys_proxies.get("https"):
+                proxies = {"http": sys_proxies["https"], "https": sys_proxies["https"]}
+        resp = None
+        for url in urls:
+            try:
+                resp = requests.get(url, headers={"User-Agent": _TILE_UA},
+                                    proxies=proxies or None, timeout=10)
+                if resp.status_code == 200 and resp.content:
+                    _TILE_LAST_OK = url.rsplit("/", 3)[0]
+                    break
+                logger.debug("OSM 瓦片 %s 返回 %s", url, resp.status_code)
+                resp = None
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("OSM 瓦片 %s 失败: %s", url, exc)
+                resp = None
+        if resp is None:
             return None
         os.makedirs(_TILE_CACHE_DIR, exist_ok=True)
         tmp = cache + f".{os.getpid()}.tmp"
@@ -1173,9 +1530,13 @@ class ControlApiHandler:
     """控制 API + 选择页主页服务（仅监听 127.0.0.1）。
 
     GET  /            选择页（web/index.html，深色分屏入口）
+    GET  /lite.html   Lite 外置小窗（--lite 模式，pywebview 顶置显示坐标，轮询 /state、/points）
     GET  /state       悬浮窗/选择页状态轮询
+    GET  /points      最近捕获点列表
     GET  /tutorial.md 打包进 exe 的使用教程（纯文本）
     POST /settings    设置更新（悬浮窗设置抽屉 / 选择页）
+    POST /official-login/{platform} 官网登录 + 自动拦截 Cookie
+    POST /manual-cookie            手动录入平台 Cookie
     POST /shutdown    退出程序（先还原系统代理）
     """
 
@@ -1186,6 +1547,7 @@ class ControlApiHandler:
         "anti_decoy", "near_m", "decoy_window", "display_delay", "api_poll", "ai_auto",
         "oneclock_enabled", "oneclock_score", "oneclock_key", "map_size",
         "map_tiles", "map_zoom", "name_protect_enabled",
+        "amap_key", "amap_js_key", "overlay_enabled",
         "mirror_enabled", "open_index", "log_history",
         "proxy_port", "mirror_port", "mirror_port_geo", "control_port",
     )
@@ -1225,6 +1587,16 @@ class ControlApiHandler:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def do_OPTIONS(self):
+                # 跨端口预检：镜像页（8001/8002）→ 控制 API（18080）POST JSON 时
+                # 浏览器必发 OPTIONS，缺此处理会报 ERR_FAILED（保存设置失败）。
+                self.send_response(204)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Max-Age", "86400")
+                self.end_headers()
+
             def do_GET(self):
                 path = self.path.split("?")[0]
                 if path == "/state":
@@ -1232,8 +1604,8 @@ class ControlApiHandler:
                     with app._lock:
                         cur = app._cur_pos
                         ans = app._last_answer
-                        decoys = sum(1 for r in app._history if r.get("decoy"))
-                        cands = sum(1 for r in app._history if r.get("candidate"))
+                        decoys = app._round_decoys      # 只显示当回合计数
+                        cands = app._round_candidates
                     pending = None
                     if app.pending_cookie:
                         pending = "图寻" if app.pending_cookie[0] == "tuxun" else "GeoGuessr"
@@ -1247,8 +1619,12 @@ class ControlApiHandler:
                         "round_move": app._round_move,
                         "decoys": decoys,
                         "candidates": cands,
+                        "origin_addr": app._origin_addr,
+                        "current_addr": (cur or {}).get("address", ""),
+                        "answer_addr": (ans or {}).get("address", ""),
                         "mirrors": mirrors,
                         "intercept": bool(app._proxy_set_by_us),
+                        "tuxun_flagged": bool(getattr(app, "_tuxun_flagged", False)),
                         "pending_cookie": pending,
                         "cookies": {
                             "tuxun": bool(os.getenv("TUXUN_COOKIE", "").strip()),
@@ -1268,6 +1644,21 @@ class ControlApiHandler:
                                                "pano", "time", "address", "from_origin_m")
                          if k in r} for r in items]})
                     return
+                if path == "/phone-cc":
+                    # 中国手机号归属地：取第 4~7 位（地区编码）+ 前 3 位组成前 7 位号段反查省市
+                    m = re.search(r"[?&]num=(\d{7,})", self.path)
+                    num = m.group(1) if m else ""
+                    if len(num) == 11 and num.startswith("1"):
+                        info = _phone_cc_lookup(num)
+                        if info:
+                            self._send(200, {"ok": True, "num": num, "cc": num[3:7],
+                                             "province": info.get("p", ""),
+                                             "city": info.get("c", "")})
+                            return
+                        self._send(200, {"ok": False, "num": num, "msg": "未收录该号段"})
+                        return
+                    self._send(200, {"ok": False, "num": num, "msg": "仅支持 11 位中国手机号"})
+                    return
                 if path in ("/", "/index.html"):
                     data = _read_web_asset("index.html")
                     if data is not None:
@@ -1282,6 +1673,15 @@ class ControlApiHandler:
                         self._send_bytes(200, data, "text/plain; charset=utf-8")
                     else:
                         self._send_bytes(404, "教程缺失".encode("utf-8"), "text/plain; charset=utf-8")
+                    return
+                if path == "/lite.html":
+                    # Lite 外置悬浮小窗（--lite 模式，pywebview 全置顶）：轮询 /state、/points 渲染
+                    data = _read_web_asset("lite.html")
+                    if data is not None:
+                        self._send_bytes(200, data, "text/html; charset=utf-8")
+                    else:
+                        self._send_bytes(404, "Lite 页面资源缺失（web/lite.html）".encode("utf-8"),
+                                         "text/plain; charset=utf-8")
                     return
                 if path.startswith("/vendor/"):
                     name = os.path.basename(path)  # 只允许单文件名，防目录穿越
@@ -1306,6 +1706,27 @@ class ControlApiHandler:
                 self._send(404, {"error": "not found"})
 
             def do_POST(self):
+                if self.path.startswith("/official-login/"):
+                    plat = self.path.rsplit("/", 1)[-1]
+                    if plat not in ("tuxun", "geoguessr"):
+                        self._send(404, {"error": "unknown platform"})
+                        return
+                    ok, message = app.start_official_login(plat)
+                    url = "https://tuxun.fun/" if plat == "tuxun" else "https://www.geoguessr.com/"
+                    self._send(200 if ok else 500, {
+                        "status": "success" if ok else "error", "message": message, "url": url,
+                    })
+                    return
+                if self.path == "/manual-cookie":
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                        body = json.loads(self.rfile.read(n) or b"{}")
+                    except Exception as exc:
+                        self._send(400, {"error": str(exc)})
+                        return
+                    result = app.save_manual_cookie(body.get("platform"), body.get("cookie"))
+                    self._send(200 if result["status"] == "success" else 400, result)
+                    return
                 if self.path.startswith("/login/"):
                     # 2.0 全网页版：登录只发生在浏览器里的镜像页，返回登录页 URL
                     plat = self.path.rsplit("/", 1)[-1]
@@ -1388,11 +1809,89 @@ class ControlApiHandler:
 
 
 # ---------------------------------------------------------------------------
-# 可重启的本地代理服务线程
+# 单一 mitmproxy master（镜像 reverse + 拦截 regular/upstream）+ 分发 addon
 # ---------------------------------------------------------------------------
 
+class MirrorUnifiedAddon:
+    """单 master 分发 addon：按客户端连入的本地监听端口路由流量。
+
+    背景：mitmproxy 11 同一进程同时运行多个 DumpMaster 时，各 master 共享全局
+    proxyserver 注册表与事件循环，addon 钩子互相抢不到流量——实测镜像端口能
+    返回上游页面但 MirrorRewrite 完全不触发（2026-09-19 冷启动复现，与「残留
+    进程/启动竞态」无关）。因此本工具所有监听（镜像 reverse + 拦截 regular/
+    upstream）必须合并进同一个 master，这里按 flow.client_conn.sockname 的
+    本地端口把流量分发到 图寻镜像 / Geo镜像 / 拦截 三套处理链。
+    """
+
+    def __init__(self, app: "TuxunApp"):
+        self.app = app
+        control_port = int(app.config.get("control_port", 18080))
+        self.interceptor = TuxunInterceptor(app)
+        self.name_protect = NameProtect(app)
+        # 镜像处理链：MIRROR_SPECS 里的每个平台一个 MirrorRewrite（端口 -> handler）
+        self._handlers: dict = {}
+        for kind, spec in MIRROR_SPECS.items():
+            port = int(app.config.get(spec["port_key"], spec["default_port"]))
+            jar = MirrorCookieJar(app, spec["env_key"], spec["session_file"])
+            rw = MirrorRewrite(
+                app, port, self.interceptor if kind == "tuxun" else None, control_port, jar,
+                origin=spec["origin"], origin_label=spec["label"], kind=kind,
+                cdn_origin=spec.get("cdn_origin", ""),
+            )
+            self._handlers[port] = rw
+        self._proxy_port = int(app.config.get("proxy_port", 8080))
+        self._intercept: object = object()  # 拦截链哨兵
+
+    def _route(self, flow: "http.HTTPFlow"):
+        """按客户端连入的本地端口取处理链；未知端口兜底走拦截链。"""
+        try:
+            port = flow.client_conn.sockname[1] if flow.client_conn else None
+        except Exception:
+            port = None
+        if port is not None and port in self._handlers:
+            return self._handlers[port]
+        return self._intercept
+
+    def request(self, flow: "http.HTTPFlow") -> None:
+        h = self._route(flow)
+        try:
+            if h is self._intercept:
+                self.interceptor.request(flow)
+            else:
+                h.request(flow)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("请求钩子异常: %s", exc)
+
+    def response(self, flow: "http.HTTPFlow") -> None:
+        h = self._route(flow)
+        try:
+            if h is self._intercept:
+                self.interceptor.response(flow)
+                self.name_protect.response(flow)
+            else:
+                h.response(flow)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("响应钩子异常: %s", exc)
+
+    def websocket_message(self, flow: "http.HTTPFlow") -> None:
+        h = self._route(flow)
+        try:
+            if h is self._intercept:
+                self.interceptor.websocket_message(flow)
+            else:
+                h.websocket_message(flow)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("WS 钩子异常: %s", exc)
+
+
 class ProxyServer:
-    """在独立线程里运行 mitmproxy；支持运行时切换上级代理（无需重启/释放端口）。"""
+    """单一 mitmproxy master 的宿主：镜像 + 拦截所有监听配置在一个 master 里。
+
+    mitmproxy 11 同一进程只能可靠运行一个 DumpMaster（多个 master 互相踩全局
+    proxyserver 注册表，addon 钩子会失效）。因此镜像端口（reverse mode）与拦截
+    端口（regular/upstream mode）全部放进这一个 master 的 mode 列表，运行时通过
+    Options.mode 热增删/切换 8080 槽位，支持级联上级代理。
+    """
 
     def __init__(self, app: "TuxunApp", port: int):
         self.app = app
@@ -1407,12 +1906,19 @@ class ProxyServer:
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def _mode_spec(self, upstream: str) -> str:
+    def _mode_list(self, upstream: str) -> List[str]:
+        """完整 mode 列表：镜像 reverse（可选）+ 拦截 regular/upstream（8080 槽）。"""
+        modes: List[str] = []
+        if getattr(self.app, "mirror_on", True):
+            for spec in MIRROR_SPECS.values():
+                port = int(self.app.config.get(spec["port_key"], spec["default_port"]))
+                modes.append(f"reverse:{spec['origin']}@127.0.0.1:{port}")
         listen = f"@127.0.0.1:{self.port}"
-        return (f"upstream:{upstream}{listen}") if upstream else f"regular{listen}"
+        modes.append(f"upstream:{upstream}{listen}" if upstream else f"regular{listen}")
+        return modes
 
     def start(self, upstream: str = "") -> bool:
-        """启动服务；已在运行时仅热切换模式，返回是否就绪。"""
+        """启动服务；已在运行时仅热切换/增删 mode，返回是否就绪。"""
         with self._lock:
             if self.running:
                 if upstream != self.upstream:
@@ -1429,16 +1935,16 @@ class ProxyServer:
             return self.running and port_listening("127.0.0.1", self.port, timeout=0.4)
 
     def _apply_mode(self, upstream: str) -> None:
-        """运行时切换 regular/upstream 模式（mitmproxy 支持在线重配置）。"""
+        """运行时重配整个 mode 列表（镜像常驻；8080 槽 regular/upstream 热切换）。"""
         if self._master is None or self._loop is None:
             return
-        spec = self._mode_spec(upstream)
+        modes = self._mode_list(upstream)
 
         def _apply():
             try:
-                self._master.options.mode = [spec]
+                self._master.options.mode = modes
                 self.upstream = upstream
-                logger.info("代理模式已切换: %s", spec)
+                logger.info("代理模式已切换: %s", " | ".join(modes))
             except Exception as exc:  # noqa: BLE001
                 logger.error("切换代理模式失败: %s", exc)
 
@@ -1469,9 +1975,9 @@ class ProxyServer:
 
     def _run(self, upstream: str) -> None:
         async def _main() -> None:
-            opts = Options(mode=[self._mode_spec(upstream)])
+            opts = Options(mode=self._mode_list(upstream))
             master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-            master.addons.add(TuxunInterceptor(self.app), NameProtect(self.app))
+            master.addons.add(MirrorUnifiedAddon(self.app))
             self._master = master
             await master.run()
 
@@ -1602,6 +2108,9 @@ class TuxunApp:
         self._last = None           # (lat, lng) 去重
         self._round_anchor = None   # (key, pano, ts, trusted) 本回合锚点（反作弊）
         self._candidates: dict = {}  # pano -> (lat, lng) 存疑候选（等待 API 校准）
+        self._origin_addr = ""      # 本回合真值坐标的逆地理地址（悬浮窗「原点」小字）
+        self._round_decoys = 0      # 本回合诱饵计数（新真值到达时清零）
+        self._round_candidates = 0  # 本回合候选计数
         self._round_move = None     # 当前回合移动模式（True 可移动 / False 无移动 / None 未知）
         self._cur_pos = None        # {'lat','lng','from_origin_m','time'} 玩家目前位置
         self._last_answer = None    # {'lat','lng','time'} 最近一次揭示的答案
@@ -1621,12 +2130,16 @@ class TuxunApp:
         }
         self._last_seen_cookie: dict = {}
         self.pending_cookie: Optional[Tuple[str, str]] = None  # (platform, cookie_header)
+        self._official_login_platforms: set = set()
 
     # ------------------------------------------------------------------
     # Cookie 自动录入
     # ------------------------------------------------------------------
     def note_platform_cookie(self, plat: str, cookie_header: str) -> None:
         """拦截到平台请求的 Cookie 头：未录入且未拒绝时，发起“是否录入”询问。"""
+        if plat in self._official_login_platforms:
+            self.note_mirror_login(plat, cookie_header)
+            return
         if self.cookies_known.get(plat):
             return
         if (self.config.get("cookie_declined") or {}).get(plat):
@@ -1678,6 +2191,37 @@ class TuxunApp:
         logger.info("Cookie 录入: 用户拒绝（平台=%s，已记忆不再询问）", plat)
         return {"status": "info",
                 "message": f"已跳过 {label}（不再询问；可删除 config.json 的 cookie_declined 重置）"}
+
+    def save_manual_cookie(self, plat: str, cookie_header: str) -> dict:
+        """保存网页端手动输入的 Cookie，并立即更新当前进程会话。"""
+        if plat not in ("tuxun", "geoguessr"):
+            return {"status": "error", "message": "未知平台"}
+        cookie = str(cookie_header or "").strip()
+        must = "fun_ticket=" if plat == "tuxun" else "session="
+        if must not in cookie.lower():
+            return {"status": "error", "message": f"Cookie 中未找到 {must}"}
+        key = "TUXUN_COOKIE" if plat == "tuxun" else "GEOGUESSR_COOKIE"
+        try:
+            upsert_env_line(key, cookie)
+            os.environ[key] = cookie
+            self.cookies_known[plat] = True
+            if plat == "tuxun":
+                self.api_reader.refresh_agent()
+            logger.info("手动录入 %s Cookie，已写入 .env（值不入日志）", plat)
+            return {"status": "success", "message": "Cookie 已保存并即时生效"}
+        except Exception as exc:
+            logger.error("手动录入 Cookie 失败（平台=%s）: %s", plat, exc)
+            return {"status": "error", "message": f"写入 .env 失败: {exc}"}
+
+    def start_official_login(self, plat: str) -> Tuple[bool, str]:
+        """开启系统代理拦截，供用户在平台官网登录并自动抓取 Cookie。"""
+        if plat not in ("tuxun", "geoguessr"):
+            return False, "未知平台"
+        ok, message = self.enable_interception()
+        if not ok:
+            return False, message
+        self._official_login_platforms.add(plat)
+        return True, f"官网登录拦截已开启：{message}"
 
     # ------------------------------------------------------------------
     # 内置登录窗口：打开官网让用户正常登录（图寻可扫码），自动抓 Cookie 写入 .env
@@ -1900,6 +2444,11 @@ class TuxunApp:
                 print(f"[对照] 街景元数据坐标与 API 真值不一致（差 {err:.1f} km），已按诱饵排除。")
         if kind in ("dup",):
             return
+        if kind == "main":
+            # 新回合主点/真值到达：重置本回合干扰计数（悬浮窗「干扰/候选」显示当回合值）
+            with self._lock:
+                self._round_decoys = 0
+                self._round_candidates = 0
         if kind == "moved":
             # 移动回合：更新「目前位置」（答案保持原点不动）
             origin_key = self._round_anchor[0] if self._round_anchor else key
@@ -1922,7 +2471,8 @@ class TuxunApp:
         decoy = kind == "decoy"
         candidate = kind == "candidate"
         moved = kind == "moved"
-        address = "" if (decoy or candidate or moved) else reverse_geocode(
+        # 诱饵/候选是反作弊干扰点，不做逆地理（省请求）；主点与移动点都显示地址
+        address = "" if (decoy or candidate) else reverse_geocode(
             lat, lng, amap_key=self.config.get("amap_key", ""), coord=coord
         )
         record = {
@@ -1952,12 +2502,20 @@ class TuxunApp:
             self._append_history(record)
         if moved:
             self._cur_pos = {"lat": record["lat"], "lng": record["lng"],
-                             "from_origin_m": from_origin_m, "time": record["time"]}
+                             "from_origin_m": from_origin_m, "time": record["time"],
+                             "address": address}
         elif not decoy and not candidate:
-            self._cur_pos = {"lat": record["lat"], "lng": record["lng"], "time": record["time"]}
+            self._cur_pos = {"lat": record["lat"], "lng": record["lng"], "time": record["time"],
+                             "address": address}
+            self._origin_addr = address
             if source == "积分赛答案揭示":
                 self._last_answer = {"lat": record["lat"], "lng": record["lng"],
-                                     "time": record["time"]}
+                                     "time": record["time"], "address": address}
+        with self._lock:
+            if decoy:
+                self._round_decoys += 1
+            elif candidate:
+                self._round_candidates += 1
         if self.console_only:
             self._print_record(record)
         elif self.window is not None:
@@ -2237,53 +2795,31 @@ def install_signal_handlers(app: TuxunApp) -> None:
 MIRROR_SPECS = {
     "tuxun": {"origin": "https://tuxun.fun", "label": "图寻", "kind": "tuxun",
               "env_key": "TUXUN_COOKIE", "session_file": "_mirror_session_tuxun.txt",
-              "cdn_origin": "https://b68res.daai.fun", "port_key": "mirror_port"},
+              "cdn_origin": "https://b68res.daai.fun", "port_key": "mirror_port",
+              "default_port": 8001},
     "geoguessr": {"origin": "https://www.geoguessr.com", "label": "GeoGuessr", "kind": "geoguessr",
                   "env_key": "GEOGUESSR_COOKIE", "session_file": "_mirror_session_geo.txt",
-                  "cdn_origin": "", "port_key": "mirror_port_geo"},
+                  "cdn_origin": "", "port_key": "mirror_port_geo", "default_port": 8002},
 }
 
 
-def start_mirror_server(app: "TuxunApp", kind: str, port: int, control_port: int,
-                        mirrors: Optional[dict] = None) -> None:
-    """平台镜像：反向代理 + 页面注入 + 控制 API/选择页（免证书、免系统代理）。"""
-    spec = MIRROR_SPECS[kind]
-    jar = MirrorCookieJar(app, spec["env_key"], spec["session_file"])
-    if mirrors is None:
-        mirrors = {}
-    mirrors[kind] = port
-    ControlApiHandler.start(app, control_port, mirrors)
+def _serve_loop(app: "TuxunApp") -> None:
+    """Lite 模式的服务循环（搬进后台 daemon 线程运行）。
 
-    def _run() -> None:
-        async def _m() -> None:
-            opts = Options(mode=[f"reverse:{spec['origin']}@127.0.0.1:{port}"])
-            master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-            interceptor = TuxunInterceptor(app) if kind == "tuxun" else None
-            rewrite = MirrorRewrite(app, port, interceptor, control_port, jar,
-                                    origin=spec["origin"], origin_label=spec["label"],
-                                    kind=kind, cdn_origin=spec.get("cdn_origin", ""))
-            master.addons.add(rewrite)
-            await master.run()
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(_m())
-        except Exception as exc:  # noqa: BLE001
-            logger.error("镜像服务异常退出: %s", exc)
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
-
-    threading.Thread(target=_run, daemon=True, name=f"mirror-{kind}").start()
-    deadline = time.time() + 12
-    while time.time() < deadline:
-        if port_listening("127.0.0.1", port, timeout=0.4):
-            return
-        time.sleep(0.15)
-    logger.warning("镜像端口 %d 未就绪。", port)
+    主进程需把主线程让给 pywebview 的 GUI 事件循环（窗口关闭后 program
+    才正常收尾），故把原来的 pending_cookie 提示循环抽出来在线程里跑。
+    """
+    try:
+        while True:
+            if app.pending_cookie:
+                plat, _ck = app.pending_cookie
+                label = "图寻" if plat == "tuxun" else "GeoGuessr"
+                ans = input(f"检测到[{label}]，是否自动录入cookie？(是/否): ").strip().lower()
+                result = app.answer_cookie_prompt(ans in ("是", "y", "yes", "1"))
+                print(f"  -> {result['message']}")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n正在退出 ...")
 
 
 def main() -> None:
@@ -2304,6 +2840,8 @@ def main() -> None:
     parser.add_argument("--login", choices=["tuxun", "geoguessr"], metavar="平台",
                         help="在系统浏览器打开对应镜像登录页（网页登录），Cookie 自动录入")
     parser.add_argument("--install-cert", action="store_true", help="安装 mitmproxy 根证书后退出")
+    parser.add_argument("--lite", action="store_true",
+                        help="Lite 模式：不注入页面悬浮窗，改用 pywebview 外置小窗显示坐标")
     parser.add_argument("--no-system-proxy", action="store_true", help="不自动改系统代理（浏览器手动设置）")
     args = parser.parse_args()
 
@@ -2318,6 +2856,10 @@ def main() -> None:
         sys.exit(1)
 
     config = load_config()
+    if args.lite:
+        # Lite 模式：只读轮询控制 API 渲染外置小窗，无需往游戏页面注入覆盖层，
+        # 故本次进程关闭 overlay 注入（仅改运行态 config 对象，不写回 config.json）。
+        config["overlay_enabled"] = False
     if args.port:
         config["proxy_port"] = args.port
     load_dotenv(os.path.join(BASE_DIR, ".env"))  # NameProtect 学习需要读取 Cookie
@@ -2350,25 +2892,35 @@ def main() -> None:
     heal_stale_proxy(app.port)
 
     # 镜像模式：免证书免系统代理的本地直连入口（悬浮窗注入到页面）
+    app.mirror_on = mirror_on   # 供 ProxyServer._mode_list 决定是否挂 reverse 监听
     mirrors: dict = {}
     # 控制 API + 选择页常驻（未开镜像也能打开主页看状态/教程/退出）
     ControlApiHandler.start(app, int(config.get("control_port", 18080)), mirrors)
     if mirror_on:
-        started = []
-        for kind, pkey, default in (("tuxun", "mirror_port", 8001), ("geoguessr", "mirror_port_geo", 8002)):
-            # 未登录也启动镜像：全网页端登录就发生在镜像页里（登录 Cookie 会被自动捕获）
-            port_k = int(config.get(f"mirror_port_{kind}", default)) if kind == "geoguessr" else int(config.get("mirror_port", default))
-            start_mirror_server(app, kind, port_k, int(config.get("control_port", 18080)), mirrors)
-            if port_listening("127.0.0.1", port_k):
-                started.append(f"{kind}=http://127.0.0.1:{port_k}")
+        # 未登录也启动镜像：登录 Cookie 会在请求/响应中被自动捕获（全网页端登录链路）
+        for spec in MIRROR_SPECS.values():
+            mirrors[spec["kind"]] = int(config.get(spec["port_key"], spec["default_port"]))
+
+    # 单一 mitmproxy master 承载 镜像(reverse 8001/8002) + 拦截(8080)：
+    # mitmproxy 11 同进程多 DumpMaster 会互相踩全局 proxyserver 注册表，导致
+    # 镜像 addon 钩子失效（2026-09-19 实测根因），因此所有监听合并为一个 master。
+    upstream, _ = app._resolve_upstream()
+    app.server.start(upstream)
+    if mirror_on:
+        deadline = time.time() + 8
+        while time.time() < deadline and not all(port_listening("127.0.0.1", p) for p in mirrors.values()):
+            time.sleep(0.15)
+        started = [f"{k}=http://127.0.0.1:{p}" for k, p in mirrors.items()
+                   if port_listening("127.0.0.1", p)]
         if started:
             logger.info("镜像已就绪: %s | 选择页: http://127.0.0.1:%d/", " | ".join(started),
                         int(config.get("control_port", 18080)))
         else:
             logger.warning("没有镜像端口启动成功。")
+    print(f"拦截代理端口 127.0.0.1:{app.port} 已启动（仅代理协议，浏览器不要直接打开这个端口），等待捕获街景坐标 ...\n")
 
-    # 自动打开选择页（深色分屏入口）
-    if config.get("open_index", True):
+    # 自动打开选择页（深色分屏入口）。Lite 模式改为外置小窗，不自动弹选择页。
+    if not args.lite and config.get("open_index", True):
         try:
             webbrowser.open(f"http://127.0.0.1:{int(config.get('control_port', 18080))}/")
         except Exception as exc:  # noqa: BLE001
@@ -2377,9 +2929,10 @@ def main() -> None:
     # --login：系统浏览器直接打开镜像登录页（网页登录，Cookie 自动录入）
     if args.login:
         try:
-            url = mirror_login_url(config, args.login)
+            ok, message = app.start_official_login(args.login)
+            url = "https://tuxun.fun/" if args.login == "tuxun" else "https://www.geoguessr.com/"
             webbrowser.open(url)
-            print(f"[登录] 已在系统浏览器打开 {url} —— 在页面内登录即可，Cookie 会自动录入。")
+            print(f"[登录] {message}；已在系统浏览器打开 {url} —— 登录后 Cookie 自动录入。")
         except Exception as exc:  # noqa: BLE001
             logger.debug("打开登录页失败: %s", exc)
 
@@ -2394,18 +2947,30 @@ def main() -> None:
 
     print_banner(app, auto_proxy, mirror_on)
 
-    # 代理服务始终先启动（拦截开关只负责接管/还原系统代理）
-    if not app.server.running:
-        upstream, _ = app._resolve_upstream()
-        app.server.start(upstream)
-        print(f"拦截代理端口 127.0.0.1:{app.port} 已启动（仅代理协议，浏览器不要直接打开这个端口），等待捕获街景坐标 ...\n")
-
     if args.tui:
         try:
             import tuxun_tui
             tuxun_tui.run_tui(app, mirrors, log_file)
         except KeyboardInterrupt:
             print("\n正在退出 ...")
+    elif args.lite:
+        # Lite 外置小窗：pywebview 必须在"主线程"跑 GUI 事件循环，因此把
+        # 服务循环(含 pending_cookie 提示)放进后台 daemon 线程，再由主线程
+        # 打开顶置小窗并阻塞等待。窗口关闭后 webview.start() 返回，正常收尾。
+        threading.Thread(target=_serve_loop, args=(app,),
+                         name="lite-serve", daemon=True).start()
+        try:
+            import webview
+        except Exception as exc:  # noqa: BLE001
+            print("缺少 pywebview，无法打开 Lite 小窗（请先 pip install pywebview）：", exc)
+        else:
+            url = f"http://127.0.0.1:{int(config.get('control_port', 18080))}/lite.html"
+            try:
+                webview.create_window("图寻助手 Lite", url, width=420, height=360,
+                                      resizable=True, on_top=True, min_size=(340, 300))
+                webview.start(debug=False)  # 阻塞主线程；窗口关闭后再收尾退出
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Lite 窗口启动失败: %s", exc)
     else:
         try:
             while True:

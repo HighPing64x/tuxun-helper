@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>图寻助手 Lite</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<style>
+  /* 紧凑的悬浮小面板：不注入页面的外置 Lite 窗口（pywebview 全置顶显示坐标） */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #e8e8f0; display: flex; flex-direction: column; font-size: 12px;
+  }
+
+  /* ================= 顶栏 ================= */
+  header {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-bottom: 1px solid #1c1c30;
+  }
+  header .title { font-size: 12px; letter-spacing: 2px; color: #fff; white-space: nowrap; }
+  header .title b { color: #5ab8ff; font-weight: 600; }
+  header .seed { flex: 1; }
+  header #conn { width: 8px; height: 8px; border-radius: 50%; background: #d97a7a; box-shadow: 0 0 8px #d97a7a; }
+  header #conn.ok { background: #69db7c; box-shadow: 0 0 8px #69db7c; }
+  header #conn.off { background: #d97a7a; box-shadow: 0 0 8px #d97a7a; }
+  header .mirrors { font-size: 10px; color: #6a6a80; white-space: nowrap; }
+
+  /* ================= 三行大号坐标 ================= */
+  #rows { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; }
+  .row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 6px; background: #12121e; border: 1px solid #1c1c30;
+  }
+  .row .tag { width: 34px; font-size: 11px; color: #8a8aa8; flex: none; }
+  .row .coords { font-family: Consolas, monospace; font-size: 13px; color: #fff; min-width: 150px; flex: none; }
+  .row .addr {
+    flex: 1; font-size: 11px; color: #a8a8c0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.origin .coords { color: #f0c674; }   /* 原点：金色 */
+  .row.current .coords { color: #e8e8f0; }
+  .row.answer { border-color: #2a3f6b; background: #131c30; }
+  .row.answer .tag { color: #5ab8ff; }
+  .row.answer .coords { color: #7ec8ff; font-weight: 600; }  /* 答案：高亮蓝 */
+
+  /* ================= 地图 ================= */
+  #map { flex: 1; min-height: 0; margin: 4px 10px; border: 1px solid #1c1c30; border-radius: 6px; }
+
+  /* ================= 捕获点列表 ================= */
+  #points-wrap { border-top: 1px solid #1c1c30; }
+  #points-toggle {
+    width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+    color: #8a8aa8; font-size: 11px; padding: 5px 10px; letter-spacing: 1px; font-family: inherit;
+  }
+  #points-toggle:hover { color: #cfd6ff; }
+  #points-list { max-height: 110px; overflow: auto; padding: 2px 10px 8px; display: none; }
+  #points-list.open { display: block; }
+  .pt { padding: 2px 0; font-size: 11px; color: #a8a8c0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pt b { color: #c8c8e0; font-weight: 500; }
+  .pt .ad { color: #6a6a80; margin-left: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">图寻助手 <b>Lite</b></span>
+  <span class="mirrors" id="mirrors"></span>
+  <span class="seed"></span>
+  <span id="conn"></span>
+</header>
+
+<div id="rows">
+  <div class="row origin"><span class="tag">原点</span><span class="coords" id="c-origin">--</span><span class="addr" id="a-origin"></span></div>
+  <div class="row current"><span class="tag">目前</span><span class="coords" id="c-current">--</span><span class="addr" id="a-current"></span></div>
+  <div class="row answer"><span class="tag">答案</span><span class="coords" id="c-answer">--</span><span class="addr" id="a-answer"></span></div>
+</div>
+
+<div id="map"></div>
+
+<div id="points-wrap">
+  <button id="points-toggle">捕获点列表 ▼</button>
+  <div id="points-list"></div>
+</div>
+
+<script src="/vendor/leaflet.js"></script>
+<script>
+  "use strict";
+  // Lite 外置小窗：轮询本机控制 API（同一控制服务同源伺服，故用相对路径，不写死端口）
+  // /state 出 原点/目前/答案，/points 出最近捕获点。约 0.8s 刷新一次。
+
+  var map = L.map('map', { zoomControl: false, attributionControl: false }).setView([35, 105], 2);
+  L.tileLayer('/tiles/osm/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  // 三类坐标 marker（颜色区分：原点金 / 目前红 / 答案蓝），无坐标时不画
+  var markers = { origin: null, current: null, answer: null };
+  var colorOf = { origin: '#f0c674', current: '#ff6b6b', answer: '#5ab8ff' };
+  var el = { origin: 'c-origin', current: 'c-current', answer: 'c-answer' };
+  var addrEl = { origin: 'a-origin', current: 'a-current', answer: 'a-answer' };
+  var _fitted = false;  // 只在首个坐标出现时自适应一次视野，避免轮询反复重置用户缩放
+
+  function fmt(p) {
+    if (!p) return null;
+    var lat = (p.lat != null) ? p.lat : (p.latitude);
+    var lng = (p.lng != null) ? p.lng : (p.longitude);
+    if (lat == null || lng == null) return null;
+    return { lat: +lat, lng: +lng };
+  }
+
+  // 更新单个 marker（key 用 index 值：0 原点 /1 目前/2 答案）
+  function setMarker(key, p, label) {
+    var c = fmt(p);
+    if (!c) return;
+    if (markers[key]) { markers[key].setLatLng([c.lat, c.lng]); return; }
+    markers[key] = L.circleMarker([c.lat, c.lng], {
+      radius: 6, color: colorOf[key], weight: 2, fillColor: colorOf[key], fillOpacity: .35
+    }).addTo(map).bindTooltip(label, { permanent: false });
+  }
+
+  function fitAll() {
+    var pts = [];
+    Object.keys(markers).forEach(function (k) {
+      if (markers[k]) pts.push(markers[k].getLatLng());
+    });
+    if (!pts.length || _fitted) return;
+    _fitted = true;
+    map.fitBounds(pts, { padding: [18, 18], maxZoom: 16 });
+  }
+
+  function renderState(s) {
+    var conn = document.getElementById('conn');
+    if (!s) { conn.className = ''; return; }
+    conn.className = 'ok';
+    // 镜像在线状态（可选信息）
+    var m = s.mirrors || {};
+    var lbl = [];
+    if (m.tuxun) lbl.push('图寻:' + m.tuxun);
+    if (m.geoguessr) lbl.push('GG:' + m.geoguessr);
+    document.getElementById('mirrors').textContent = lbl.join('  ');
+    // 异步写了 state 但也可能只给 /points 刷新历史
+
+    setMarker('origin', s.origin, '原点');
+    setMarker('current', s.current, '目前');
+    setMarker('answer', s.answer, '答案');
+    fitAll();
+
+    function text(id, v) { document.getElementById(id).textContent = v || '--'; }
+    var o = s.origin ? (s.origin.lat + ',' + s.origin.lng) : '--';
+    var c = s.current ? (s.current.lat + ',' + s.current.lng) : '--';
+    var a = s.answer ? (s.answer.lat + ',' + s.answer.lng) : '--';
+    text('c-origin', o);
+    text('c-current', c);
+    text('c-answer', a);
+    text('a-origin', s.origin_addr || '');
+    text('a-current', s.current_addr || '');
+    text('a-answer', s.answer_addr || '');
+  }
+
+  function renderPoints(list) {
+    var box = document.getElementById('points-list');
+    if (!list || !list.length) { box.innerHTML = ''; return; }
+    var html = '';
+    // 倒序展示，最新的在上
+    for (var i = list.length - 1; i >= 0; i--) {
+      var r = list[i];
+      var c = (r.lat != null && r.lng != null) ? r.lat + ',' + r.lng : '(无坐标)';
+      var ad = r.address || '';
+      html += '<div class="pt"><b>' + c + '</b>' + (ad ? '<span class="ad">' + ad + '</span>' : '') + '</div>';
+    }
+    box.innerHTML = html;
+  }
+
+  // 折叠开关
+  document.getElementById('points-toggle').addEventListener('click', function () {
+    var box = document.getElementById('points-list');
+    box.classList.toggle('open');
+    this.textContent = box.classList.contains('open') ? '捕获点列表 ▲' : '捕获点列表 ▼';
+  });
+
+  var lastState = null;
+  function tick() {
+    // /state 失败（如控制服务未就绪/已停止）则显示断连红点
+    fetch('/state', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('bad'); return r.json(); })
+      .then(function (s) { lastState = s; renderState(s); })
+      .catch(function () {
+        // 保持旧数据不闪断，但红点提示断连
+        var conn = document.getElementById('conn');
+        conn.className = 'off';
+        // 断连时清掉覆盖显示
+        document.getElementById('mirrors').textContent = '';
+      });
+    fetch('/points', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('bad'); return r.json(); })
+      .then(function (d) { renderPoints(d.points); })
+      .catch(function () { /* 点列表失败不影响主显示 */ });
+  }
+
+  tick();
+  setInterval(tick, 800);
+</script>
+</body>
+</html>

@@ -15,6 +15,10 @@ class FakeHeaders(dict):
     def get_all(self, key):
         return [v for k, v in self.items() if k.lower() == key.lower()]
 
+    # 与 mitmproxy 11 Headers 保持一致：add 追加一条同名头（set-cookie 可多条）
+    def add(self, key, value):
+        self[key] = value
+
     def append(self, key, value):
         self[key] = value
 
@@ -98,6 +102,19 @@ def test_request_retarget():
     print("5. CDN 改道 + API 会话注入: 通过")
 
 
+def test_request_cookie_capture():
+    """登录凭证通过后续请求 Cookie 发送时，也必须落入镜像会话。"""
+    app, rw = make()
+    app.note_mirror_login = lambda *args: None
+    f = FakeFlow("http://127.0.0.1:8001/api/v0/user/profile", "{}", ct="application/json")
+    f.request.headers["cookie"] = "fun_ticket=FROM_BROWSER; SESSION=OTHER"
+    rw.request(f)
+    assert rw.jar.load() == "fun_ticket=FROM_BROWSER; SESSION=OTHER", rw.jar.load()
+    if os.path.exists("_mirror_session_tuxun.txt"):
+        os.remove("_mirror_session_tuxun.txt")
+    print("5b. 请求 Cookie 捕获（浏览器后续请求）: 通过")
+
+
 def test_set_cookie():
     app, rw = make()
     f = FakeFlow("https://tuxun.fun/api/x", "{}", ct="application/json")
@@ -126,6 +143,22 @@ def test_mirror_login_capture():
         assert fh.read().strip() == "fun_ticket=TICKET123", "会话文件应只含 name=value 对"
     os.remove("_mirror_session_tuxun.txt")
     print("10. 镜像登录捕获（Set-Cookie -> jar -> .env）: 通过")
+
+
+def test_cookie_env_precedence_over_stale_session_file():
+    """新登录后的 .env Cookie 必须覆盖旧的会话文件，避免镜像继续携带过期会话。"""
+    app, rw = make()
+    os.environ["TUXUN_COOKIE"] = "fun_ticket=NEWER"
+    with open("_mirror_session_tuxun.txt", "w", encoding="utf-8") as fh:
+        fh.write("fun_ticket=STALE")
+    try:
+        jar = tuxun_proxy.MirrorCookieJar(app, "TUXUN_COOKIE", "_mirror_session_tuxun.txt")
+        assert jar.load() == "fun_ticket=NEWER", jar.load()
+    finally:
+        os.environ.pop("TUXUN_COOKIE", None)
+        if os.path.exists("_mirror_session_tuxun.txt"):
+            os.remove("_mirror_session_tuxun.txt")
+    print("10b. 镜像 Cookie 优先级：.env 覆盖过期会话文件: 通过")
 
 
 def test_location_rewrite():
@@ -187,11 +220,30 @@ def test_index_and_tutorial():
 
     idx = http.open("http://127.0.0.1:18181/", timeout=5).read().decode("utf-8")
     assert "TUXUN HELPER" in idx and "side-tuxun" in idx, "选择页内容异常"
+    assert "official-login" in idx and "manual-cookie" in idx, "登录方式入口缺失"
     tut = http.open("http://127.0.0.1:18181/tutorial.md", timeout=5).read().decode("utf-8")
     assert "一键特定分数" in tut, "教程缺少一键分数章节"
     state = json.loads(http.open("http://127.0.0.1:18181/state", timeout=5).read())
     assert state["mirrors"] == {"tuxun": 8001}, state["mirrors"]
     print("6. 选择页 / + 教程 /tutorial.md + mirrors 端口状态: 通过")
+
+
+def test_manual_cookie_save():
+    """网页手动 Cookie 录入应写入环境并即时标记登录。"""
+    saved = {}
+    old = tuxun_proxy.upsert_env_line
+    tuxun_proxy.upsert_env_line = lambda k, v: saved.__setitem__(k, v)
+    app, rw = make()
+    try:
+        result = app.save_manual_cookie("tuxun", "fun_ticket=MANUAL_TEST")
+        assert result["status"] == "success", result
+        assert saved.get("TUXUN_COOKIE") == "fun_ticket=MANUAL_TEST", saved
+        assert app.cookies_known["tuxun"] is True
+        assert app.save_manual_cookie("tuxun", "bad")["status"] == "error"
+    finally:
+        tuxun_proxy.upsert_env_line = old
+        os.environ.pop("TUXUN_COOKIE", None)
+    print("6b. 手动 Cookie 录入接口: 通过")
 
 
 def test_overlay_v2():
@@ -260,11 +312,14 @@ if __name__ == "__main__":
     test_set_cookie()
     test_json_rewrite()
     test_request_retarget()
+    test_request_cookie_capture()
     test_control_api()
     test_index_and_tutorial()
+    test_manual_cookie_save()
     test_overlay_v2()
     test_tiles_and_login_route()
     test_settings_endpoints()
     test_mirror_login_capture()
+    test_cookie_env_precedence_over_stale_session_file()
     test_location_rewrite()
     print("== 镜像模式单元测试全部通过 ==")

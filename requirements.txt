@@ -9,5 +9,8 @@ pillow>=10.0.0             # 仅 --grid 拼图模式需要
 mitmproxy>=10.0.0
 rich>=13.0.0               # 仅 --tui 后台仪表盘需要（未装会自动降级为纯文本输出）
 
+# Lite 外置小窗（--lite，pywebview 全置顶显示坐标）
+pywebview>=5.0.0
+
 # 如需使用 socks5 代理（PROXY_URL=socks5h://...），额外安装：
 # pysocks>=1.7.1
